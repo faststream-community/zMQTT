@@ -127,7 +127,9 @@ def test_filter_specificity_bare_hash() -> None:
 async def test_connect_refused_raises() -> None:
     protocol, transport = make_protocol()
     connect = Connect(client_id="test", clean_session=True, keepalive=60)
-    transport.feed(encode(ConnAck(session_present=False, return_code=4), version="3.1.1"))
+    transport.feed(
+        encode(ConnAck(session_present=False, return_code=4), version="3.1.1")
+    )
     with pytest.raises(MQTTConnectError) as exc_info:
         await protocol.connect(connect)
     assert exc_info.value.return_code == 4
@@ -199,7 +201,9 @@ async def test_deliver_tie_first_wins(
 async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
     """Broker retransmit before app calls ack() must not re-queue the message."""
     protocol, transport = make_protocol()
-    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))
+    transport.feed(
+        encode(ConnAck(session_present=False, return_code=0), version="3.1.1")
+    )
     await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
 
     queue: asyncio.Queue[Message] = asyncio.Queue()
@@ -230,7 +234,8 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
                 retain=False,
                 dup=True,
                 packet_id=11,
-            ), version="3.1.1"
+            ),
+            version="3.1.1",
         )
     )
     await asyncio.sleep(0.05)

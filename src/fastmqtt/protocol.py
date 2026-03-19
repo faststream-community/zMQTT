@@ -243,7 +243,10 @@ class MQTTProtocol:
         future: asyncio.Future[UnsubAck] = loop.create_future()
         self._state.pending_unsubs[pid] = future
         await self._send(
-            encode(Unsubscribe(packet_id=pid, topic_filters=tuple(filters)), version=self._version)
+            encode(
+                Unsubscribe(packet_id=pid, topic_filters=tuple(filters)),
+                version=self._version,
+            )
         )
         log.debug("Sent UNSUBSCRIBE", extra={"packet_id": pid})
         try:
