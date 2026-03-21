@@ -96,7 +96,7 @@ Send an AUTH packet for extended authentication flows (e.g. SCRAM, Kerberos):
 await client.auth("SCRAM-SHA-256", data=b"client-first-message")
 ```
 
-The `method` string must match the `authentication_method` set during CONNECT (handled automatically by the library when `auth()` is called). This is an advanced feature — most applications do not need it.
+The `method` string is sent as the MQTT 5.0 `authentication_method` in the AUTH packet. This is an advanced feature — most applications do not need it.
 
 ## CONNACK / DISCONNECT reason codes
 

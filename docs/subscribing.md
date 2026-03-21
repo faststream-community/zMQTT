@@ -82,11 +82,11 @@ async with client.subscribe("status/#", retain_handling=RetainHandling.SEND_IF_N
 
 ## Wildcard filter priority
 
-When multiple filters in the same `Subscription` all match an incoming topic, only the most specific filter's queue receives the message — delivery is never duplicated.
+When multiple filters in the same `Subscription` match an incoming topic, zmqtt routes the message to **exactly one** internal queue: the one that corresponds to the *most specific* matching filter. Delivery is never duplicated inside zmqtt.
 
 Specificity is compared level-by-level, left to right:
 
-- Literal segment beats `+`
+- A literal segment beats `+`
 - `+` beats `#`
 
 **Example:** if you subscribe to both `a/b` and `a/#`, a message on `a/b` is routed to `a/b` only:
@@ -97,10 +97,18 @@ async with client.subscribe("a/b", "a/#") as sub:
     # message published to "a/c" → delivered once, matched by "a/#"
 ```
 
-**Important notes**
-1. If you have multiple matched subscription, different brokers have different behaviour with it. *HiveMQ* sends
-only one message, *Artemis*, *Mosquitto* and *NanoMQ* send same message for each match.
-2. When two filters tie (same specificity), the library logs a `WARNING` and delivers to whichever filter was registered first.
+### Broker behaviour vs zmqtt behaviour
+
+Some brokers can deliver **multiple** PUBLISH packets to a client when the client has **overlapping subscriptions** that all match the same topic. In practice:
+
+- Some brokers may deliver only one message.
+- Others may deliver one message **per matching subscription**.
+
+zmqtt's routing rule above applies **after** packets are received: if multiple PUBLISH packets arrive from the broker, zmqtt will still enqueue each received packet (because they are distinct network deliveries). If only one PUBLISH arrives, zmqtt ensures it is delivered to the most specific matching filter queue.
+
+### Tie-breaking
+
+When two filters tie (same specificity), zmqtt logs a `WARNING` and routes the message to whichever filter was registered first.
 
 ## Duplicate-filter guard
 
