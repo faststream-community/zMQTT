@@ -1,11 +1,11 @@
-"""Tests for fastmqtt.state."""
+"""Tests for zmqtt.state."""
 
 import asyncio
 
 import pytest
 
-from fastmqtt.packets.publish import PubAck, PubComp, Publish
-from fastmqtt.state import (
+from zmqtt.packets.publish import PubAck, PubComp, Publish
+from zmqtt.state import (
     InboundQoS2Flight,
     InboundQoS2State,
     OutboundQoS2Flight,
@@ -15,7 +15,7 @@ from fastmqtt.state import (
     SessionState,
     SubscriptionEntry,
 )
-from fastmqtt.types import QoS
+from zmqtt.types import QoS
 
 
 def test_acquire_returns_sequential_ids() -> None:

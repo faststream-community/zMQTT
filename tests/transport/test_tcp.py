@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fastmqtt.errors import MQTTDisconnectedError
-from fastmqtt.transport.base import StreamTransport
+from zmqtt.errors import MQTTDisconnectedError
+from zmqtt.transport.base import StreamTransport
 
 
 def make_stream_pair(

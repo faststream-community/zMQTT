@@ -1,4 +1,4 @@
-"""Tests for fastmqtt.protocol — pure-logic and error-path tests only.
+"""Tests for zmqtt.protocol — pure-logic and error-path tests only.
 
 E2E observable behavior (QoS flows, subscribe/receive, ack) lives in
 tests/test_brokers/_base.py and runs against real brokers.
@@ -10,13 +10,13 @@ from collections import deque
 
 import pytest
 
-from fastmqtt.errors import MQTTConnectError, MQTTProtocolError, MQTTTimeoutError
-from fastmqtt.packets.codec import encode
-from fastmqtt.packets.connect import ConnAck, Connect
-from fastmqtt.packets.publish import PubAck, Publish
-from fastmqtt.protocol import MQTTProtocol, _filter_specificity, _topic_matches
-from fastmqtt.state import SessionState, SubscriptionEntry
-from fastmqtt.types import Message, QoS
+from zmqtt.errors import MQTTConnectError, MQTTProtocolError, MQTTTimeoutError
+from zmqtt.packets.codec import encode
+from zmqtt.packets.connect import ConnAck, Connect
+from zmqtt.packets.publish import PubAck, Publish
+from zmqtt.protocol import MQTTProtocol, _filter_specificity, _topic_matches
+from zmqtt.state import SessionState, SubscriptionEntry
+from zmqtt.types import Message, QoS
 
 
 class FakeTransport:
@@ -157,7 +157,7 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
     """No matching subscription: warning logged, nothing delivered."""
     protocol, _ = make_protocol()
 
-    with caplog.at_level(logging.WARNING, logger="fastmqtt.protocol"):
+    with caplog.at_level(logging.WARNING, logger="zmqtt.protocol"):
         await protocol._deliver(
             Publish(
                 topic="unknown/topic",
@@ -176,7 +176,7 @@ async def test_deliver_tie_first_wins(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Forced specificity tie: first insertion-order entry wins, WARNING logged."""
-    import fastmqtt.protocol as proto_module
+    import zmqtt.protocol as proto_module
 
     protocol, _ = make_protocol()
     q1: asyncio.Queue[Message] = asyncio.Queue()
@@ -185,7 +185,7 @@ async def test_deliver_tie_first_wins(
     protocol._state.subscriptions["a/x"] = SubscriptionEntry(queue=q2, auto_ack=True)
     monkeypatch.setattr(proto_module, "_filter_specificity", lambda _f: (0, 0))
 
-    with caplog.at_level(logging.WARNING, logger="fastmqtt.protocol"):
+    with caplog.at_level(logging.WARNING, logger="zmqtt.protocol"):
         await protocol._deliver(
             Publish(
                 topic="a/x", payload=b"v", qos=QoS.AT_MOST_ONCE, retain=False, dup=False

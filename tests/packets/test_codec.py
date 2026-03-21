@@ -1,20 +1,20 @@
-"""Tests for fastmqtt.packets.codec — encode/decode roundtrips."""
+"""Tests for zmqtt.packets.codec — encode/decode roundtrips."""
 
 import pytest
 
-from fastmqtt.packets.codec import decode, decode_varint, encode, encode_varint
-from fastmqtt.packets.connect import ConnAck, Connect, Will
-from fastmqtt.packets.disconnect import Disconnect
-from fastmqtt.packets.ping import PingReq, PingResp
-from fastmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
-from fastmqtt.packets.subscribe import (
+from zmqtt.packets.codec import decode, decode_varint, encode, encode_varint
+from zmqtt.packets.connect import ConnAck, Connect, Will
+from zmqtt.packets.disconnect import Disconnect
+from zmqtt.packets.ping import PingReq, PingResp
+from zmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
+from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from fastmqtt.types import QoS
+from zmqtt.types import QoS
 
 
 @pytest.mark.parametrize(

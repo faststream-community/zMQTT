@@ -1,14 +1,14 @@
-"""Tests for MQTT 5.0 packet encode/decode via fastmqtt.packets.codec."""
+"""Tests for MQTT 5.0 packet encode/decode via zmqtt.packets.codec."""
 
 from typing import Any, Literal
 
 import pytest
 
-from fastmqtt.packets.auth import Auth
-from fastmqtt.packets.codec import AnyPacket, decode, encode
-from fastmqtt.packets.connect import ConnAck, Connect, Will
-from fastmqtt.packets.disconnect import Disconnect
-from fastmqtt.packets.properties import (
+from zmqtt.packets.auth import Auth
+from zmqtt.packets.codec import AnyPacket, decode, encode
+from zmqtt.packets.connect import ConnAck, Connect, Will
+from zmqtt.packets.disconnect import Disconnect
+from zmqtt.packets.properties import (
     AuthProperties,
     ConnAckProperties,
     ConnectProperties,
@@ -20,15 +20,15 @@ from fastmqtt.packets.properties import (
     UnsubAckProperties,
     WillProperties,
 )
-from fastmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from fastmqtt.packets.subscribe import (
+from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from fastmqtt.types import QoS, RetainHandling
+from zmqtt.types import QoS, RetainHandling
 
 
 def roundtrip(packet: Any, version: Literal["3.1.1", "5.0"] = "5.0") -> AnyPacket:
@@ -283,7 +283,7 @@ def test_v5_suback_with_properties() -> None:
 
 
 def test_v5_unsubscribe_with_properties() -> None:
-    from fastmqtt.packets.properties import UnsubscribeProperties
+    from zmqtt.packets.properties import UnsubscribeProperties
 
     props = UnsubscribeProperties(user_properties=(("req", "1"),))
     pkt = Unsubscribe(packet_id=9, topic_filters=("a/b", "c/d"), properties=props)

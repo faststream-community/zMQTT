@@ -1,7 +1,7 @@
-site_name: fastmqtt
+site_name: zmqtt
 site_description: Pure asyncio MQTT 3.1.1 / 5.0 client
-site_url: https://borisalekseev.github.io/fastmqtt/
-repo_url: https://github.com/borisalekseev/fastmqtt
+site_url: https://borisalekseev.github.io/zmqtt/
+repo_url: https://github.com/borisalekseev/zmqtt
 theme:
   name: material
   features:

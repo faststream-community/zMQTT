@@ -9,7 +9,7 @@ Your application code does not need to handle reconnection at all in the common 
 ## `ReconnectConfig`
 
 ```python
-from fastmqtt import ReconnectConfig
+from zmqtt import ReconnectConfig
 
 config = ReconnectConfig(
     enabled=True,
@@ -31,7 +31,7 @@ With the defaults: 1 s → 2 s → 4 s → 8 s → … → 60 s.
 ## Passing config to `create_client()`
 
 ```python
-from fastmqtt import create_client, ReconnectConfig
+from zmqtt import create_client, ReconnectConfig
 
 async with create_client(
     "localhost",
@@ -47,7 +47,7 @@ Each `Subscription` is re-subscribed on the new connection automatically. The lo
 ## Disabling reconnection
 
 ```python
-from fastmqtt import create_client, ReconnectConfig
+from zmqtt import create_client, ReconnectConfig
 
 async with create_client(
     "localhost",
@@ -59,7 +59,7 @@ async with create_client(
 With reconnection disabled, `MQTTDisconnectedError` propagates out of the client context manager as an `ExceptionGroup`. Catch it with `except*`:
 
 ```python
-from fastmqtt.errors import MQTTDisconnectedError
+from zmqtt.errors import MQTTDisconnectedError
 
 try:
     async with create_client("localhost", reconnect=ReconnectConfig(enabled=False)) as client:

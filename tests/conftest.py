@@ -8,4 +8,4 @@ logging.basicConfig(level=logging.DEBUG)
 
 @pytest.fixture
 def topic() -> str:
-    return f"/fastmqtt/test/{uuid.uuid4()}"
+    return f"/zmqtt/test/{uuid.uuid4()}"

@@ -1,8 +1,8 @@
-"""Tests for fastmqtt.packets.properties — encode/decode roundtrips."""
+"""Tests for zmqtt.packets.properties — encode/decode roundtrips."""
 
 import pytest
 
-from fastmqtt.packets.properties import (
+from zmqtt.packets.properties import (
     AuthProperties,
     ConnAckProperties,
     ConnectProperties,
@@ -40,7 +40,7 @@ from fastmqtt.packets.properties import (
     encode_will_properties,
     encode_props_block,
 )
-from fastmqtt.packets._wire import encode_varint
+from zmqtt.packets._wire import encode_varint
 
 
 def test_empty_props_block() -> None:

@@ -26,7 +26,7 @@ await client.publish("topic", b"\x00\x01\x02")  # raw bytes
 | `QoS.EXACTLY_ONCE` (2) | Exactly-once | Delivered exactly once; full PUBREC/PUBREL/PUBCOMP handshake |
 
 ```python
-from fastmqtt import QoS
+from zmqtt import QoS
 
 await client.publish("cmd/device/restart", b"1", qos=QoS.AT_LEAST_ONCE)
 ```
@@ -46,8 +46,8 @@ await client.publish("status/service", "online", retain=True)
 When connected with `version="5.0"`, you can attach a `PublishProperties` object:
 
 ```python
-from fastmqtt import create_client
-from fastmqtt.packets.properties import PublishProperties
+from zmqtt import create_client
+from zmqtt.packets.properties import PublishProperties
 
 async with create_client("localhost", version="5.0") as client:
     props = PublishProperties(

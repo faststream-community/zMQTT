@@ -6,23 +6,23 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import AsyncIterator, Final, Literal, Protocol, overload
 
-from fastmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
-from fastmqtt.log import get_logger
-from fastmqtt.packets.auth import Auth
-from fastmqtt.packets.connect import Connect
-from fastmqtt.packets.properties import (
+from zmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
+from zmqtt.log import get_logger
+from zmqtt.packets.auth import Auth
+from zmqtt.packets.connect import Connect
+from zmqtt.packets.properties import (
     AuthProperties,
     ConnectProperties,
     PublishProperties,
 )
-from fastmqtt.packets.publish import Publish
-from fastmqtt.packets.subscribe import SubscriptionRequest
-from fastmqtt.protocol import MQTTProtocol
-from fastmqtt.state import SessionState
-from fastmqtt.transport.base import Transport
-from fastmqtt.transport.tcp import open_tcp
-from fastmqtt.transport.tls import open_tls
-from fastmqtt.types import Message, QoS
+from zmqtt.packets.publish import Publish
+from zmqtt.packets.subscribe import SubscriptionRequest
+from zmqtt.protocol import MQTTProtocol
+from zmqtt.state import SessionState
+from zmqtt.transport.base import Transport
+from zmqtt.transport.tcp import open_tcp
+from zmqtt.transport.tls import open_tls
+from zmqtt.types import Message, QoS
 
 TransportFactory = Callable[[str, int, ssl.SSLContext | bool], Awaitable[Transport]]
 

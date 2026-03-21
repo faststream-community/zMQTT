@@ -12,8 +12,8 @@ from typing import ClassVar, Literal
 
 import pytest
 
-from fastmqtt.client import MQTTClient, ReconnectConfig, Subscription
-from fastmqtt.types import QoS
+from zmqtt.client import MQTTClient, ReconnectConfig, Subscription
+from zmqtt.types import QoS
 
 
 @pytest.mark.broker
@@ -32,7 +32,7 @@ class BrokerTestBase(abc.ABC):
         async with MQTTClient(
             self.host,
             self.port,
-            client_id=f"fastmqtt-test-{uuid.uuid4().hex[:8]}",
+            client_id=f"zmqtt-test-{uuid.uuid4().hex[:8]}",
             version=self.version,
         ) as client:
             yield client
@@ -118,7 +118,7 @@ class BrokerTestBase(abc.ABC):
         async with MQTTClient(
             self.host,
             self.port,
-            client_id=f"fastmqtt-reconnect-{uuid.uuid4().hex[:8]}",
+            client_id=f"zmqtt-reconnect-{uuid.uuid4().hex[:8]}",
             reconnect=reconnect,
             version=self.version,
         ) as client:

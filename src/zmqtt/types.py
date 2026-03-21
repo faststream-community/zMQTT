@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 
-from fastmqtt.packets.properties import PublishProperties
+from zmqtt.packets.properties import PublishProperties
 
 
 class QoS(IntEnum):

@@ -5,7 +5,7 @@
 `create_client()` is the preferred entry point. It returns a typed client object and accepts all connection parameters:
 
 ```python
-from fastmqtt import create_client
+from zmqtt import create_client
 
 client = create_client(
     host="localhost",
@@ -98,8 +98,8 @@ async with client:
 - The underlying object is always `MQTTClient` — no two separate implementations.
 
 ```python
-from fastmqtt import create_client, MQTTClientV5
-from fastmqtt.packets.properties import PublishProperties
+from zmqtt import create_client, MQTTClientV5
+from zmqtt.packets.properties import PublishProperties
 
 async def send_with_expiry(client: MQTTClientV5) -> None:
     props = PublishProperties(message_expiry_interval=60)

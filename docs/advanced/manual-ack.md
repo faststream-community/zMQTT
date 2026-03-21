@@ -1,6 +1,6 @@
 # Manual Acknowledgement
 
-By default, fastmqtt acknowledges incoming messages automatically as soon as they are delivered to your queue. With `auto_ack=False` you take control: the broker-level ack is withheld until you explicitly call `msg.ack()`.
+By default, zmqtt acknowledges incoming messages automatically as soon as they are delivered to your queue. With `auto_ack=False` you take control: the broker-level ack is withheld until you explicitly call `msg.ack()`.
 
 ## Why use manual ack
 
@@ -41,7 +41,7 @@ Between receiving the initial PUBLISH and calling `ack()`, PUBREC has not been s
 
 ```python
 import asyncio
-from fastmqtt import create_client, QoS
+from zmqtt import create_client, QoS
 
 async def main():
     async with create_client("localhost") as client:

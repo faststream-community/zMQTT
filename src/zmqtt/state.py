@@ -4,9 +4,9 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 
-from fastmqtt.packets.publish import PubAck, PubComp, Publish
-from fastmqtt.packets.subscribe import SubAck, UnsubAck
-from fastmqtt.types import Message
+from zmqtt.packets.publish import PubAck, PubComp, Publish
+from zmqtt.packets.subscribe import SubAck, UnsubAck
+from zmqtt.types import Message
 
 
 class PacketIdPool:

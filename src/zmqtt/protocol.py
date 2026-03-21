@@ -5,28 +5,28 @@ import dataclasses
 from collections.abc import Awaitable, Callable
 from typing import Final, Literal
 
-from fastmqtt.errors import (
+from zmqtt.errors import (
     MQTTConnectError,
     MQTTDisconnectedError,
     MQTTProtocolError,
     MQTTTimeoutError,
 )
-from fastmqtt.log import get_logger
-from fastmqtt.packets.auth import Auth
-from fastmqtt.packets.codec import AnyPacket, encode
-from fastmqtt.packets.connect import ConnAck, Connect
-from fastmqtt.packets.disconnect import Disconnect
-from fastmqtt.packets.ping import PingReq, PingResp
-from fastmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from fastmqtt.packets.reader import PacketBuffer
-from fastmqtt.packets.subscribe import (
+from zmqtt.log import get_logger
+from zmqtt.packets.auth import Auth
+from zmqtt.packets.codec import AnyPacket, encode
+from zmqtt.packets.connect import ConnAck, Connect
+from zmqtt.packets.disconnect import Disconnect
+from zmqtt.packets.ping import PingReq, PingResp
+from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt.packets.reader import PacketBuffer
+from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from fastmqtt.state import (
+from zmqtt.state import (
     InboundQoS2Flight,
     InboundQoS2State,
     OutboundQoS2Flight,
@@ -35,8 +35,8 @@ from fastmqtt.state import (
     SessionState,
     SubscriptionEntry,
 )
-from fastmqtt.transport.base import Transport
-from fastmqtt.types import Message, QoS
+from zmqtt.transport.base import Transport
+from zmqtt.types import Message, QoS
 
 log = get_logger(__name__)
 

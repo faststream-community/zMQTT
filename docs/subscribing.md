@@ -74,7 +74,7 @@ The broker delivers messages at the lower of the publish QoS and the subscribe Q
 | `DO_NOT_SEND` | Never send retained messages |
 
 ```python
-from fastmqtt import RetainHandling
+from zmqtt import RetainHandling
 
 async with client.subscribe("status/#", retain_handling=RetainHandling.SEND_IF_NOT_EXISTS) as sub:
     ...
