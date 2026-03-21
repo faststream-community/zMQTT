@@ -1,14 +1,14 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
-from fastmqtt.packets.properties import (
+from zmqtt.packets.properties import (
     SubAckProperties,
     SubscribeProperties,
     UnsubAckProperties,
     UnsubscribeProperties,
 )
-from fastmqtt.packets.types import Packet, PacketType
-from fastmqtt.types import QoS, RetainHandling
+from zmqtt.packets.types import Packet, PacketType
+from zmqtt.types import QoS, RetainHandling
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

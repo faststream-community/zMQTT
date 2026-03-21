@@ -1,7 +1,7 @@
 import asyncio
 from typing import Protocol, runtime_checkable
 
-from fastmqtt.errors import MQTTDisconnectedError
+from zmqtt.errors import MQTTDisconnectedError
 
 
 @runtime_checkable

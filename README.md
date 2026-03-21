@@ -1,4 +1,4 @@
-# fastmqtt
+# zmqtt
 
 Pure asyncio MQTT 3.1.1 and 5.0 client library. No paho dependency, no threading, no god classes.
 
@@ -7,9 +7,9 @@ Pure asyncio MQTT 3.1.1 and 5.0 client library. No paho dependency, no threading
 [aiomqtt](https://github.com/sbtinstruments/aiomqtt) is a thin async wrapper around paho-mqtt.
 You inherit paho's threading model, 10 000-line files, and implicit global state — just with `async/await` painted on top.
 
-fastmqtt is built from scratch:
+zmqtt is built from scratch:
 
-| | fastmqtt | aiomqtt (paho) |
+| | zmqtt | aiomqtt (paho) |
 |---|---|---|
 | I/O model | pure asyncio | paho threads + asyncio bridge |
 | Packet codec | pure functions, I/O-free | paho internals |
@@ -21,14 +21,14 @@ fastmqtt is built from scratch:
 ## Installation
 
 ```bash
-pip install fastmqtt
+pip install zmqtt
 ```
 
 ## Quick start
 
 ```python
 import asyncio
-from fastmqtt import MQTTClient
+from zmqtt import MQTTClient
 
 async def main():
     async with MQTTClient("broker.example.com") as client:
@@ -49,7 +49,7 @@ async with MQTTClient("broker.example.com") as client:
 ## QoS levels
 
 ```python
-from fastmqtt import QoS
+from zmqtt import QoS
 
 await client.publish("topic", b"data", qos=QoS.AT_LEAST_ONCE)   # QoS 1
 await client.publish("topic", b"data", qos=QoS.EXACTLY_ONCE)    # QoS 2
@@ -86,8 +86,8 @@ are transparently re-registered after reconnect — your `async for` loop keeps 
 Pass `version=5` to use MQTT 5.0. Properties are typed dataclasses:
 
 ```python
-from fastmqtt import MQTTClient
-from fastmqtt.packets.properties import PublishProperties
+from zmqtt import MQTTClient
+from zmqtt.packets.properties import PublishProperties
 
 async with MQTTClient("broker.example.com", version=5) as client:
     props = PublishProperties(content_type="application/json")
@@ -97,7 +97,7 @@ async with MQTTClient("broker.example.com", version=5) as client:
 ## Architecture
 
 ```
-src/fastmqtt/
+src/zmqtt/
   packets/        # I/O-free codec: frozen dataclasses + pure encode/decode
   transport/      # thin asyncio reader/writer (TCP, TLS)
   state.py        # session state, QoS 2 state machine

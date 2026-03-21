@@ -7,7 +7,7 @@ Python 3.11 or later.
 ## Installation
 
 ```bash
-pip install fastmqtt
+pip install zmqtt
 ```
 
 ## Connecting to a broker
@@ -16,7 +16,7 @@ Use `create_client()` as an async context manager. The connection is established
 
 ```python
 import asyncio
-from fastmqtt import create_client
+from zmqtt import create_client
 
 async def main():
     async with create_client("localhost") as client:
@@ -58,7 +58,7 @@ The subscription is automatically sent to the broker on entry and unsubscribed o
 
 ```python
 import asyncio
-from fastmqtt import create_client, QoS
+from zmqtt import create_client, QoS
 
 async def main():
     async with create_client("localhost") as client:

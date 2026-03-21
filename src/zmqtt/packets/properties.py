@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
-from fastmqtt.packets._wire import (
+from zmqtt.packets._wire import (
     decode_bytes_field,
     decode_str,
     decode_varint,

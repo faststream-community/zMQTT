@@ -1,18 +1,18 @@
-# fastmqtt
+# zmqtt
 
 Pure asyncio MQTT 3.1.1 / 5.0 client — clean API, no legacy baggage.
 
 ## Install
 
 ```bash
-pip install fastmqtt
+pip install zmqtt
 ```
 
 ## Quick example
 
 ```python
 import asyncio
-from fastmqtt import create_client, QoS
+from zmqtt import create_client, QoS
 
 async def main():
     async with create_client("localhost") as client:
@@ -28,4 +28,4 @@ asyncio.run(main())
 
 - [Getting Started](getting-started.md)
 - [API Reference](api-reference.md)
-- [GitHub](https://github.com/toxicthunder/fastmqtt)
+- [GitHub](https://github.com/toxicthunder/zmqtt)

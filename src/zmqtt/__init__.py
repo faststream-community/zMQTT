@@ -1,4 +1,4 @@
-from fastmqtt.client import (
+from zmqtt.client import (
     MQTTClient,
     MQTTClientV311,
     MQTTClientV5,
@@ -6,7 +6,7 @@ from fastmqtt.client import (
     Subscription,
     create_client,
 )
-from fastmqtt.types import Message, QoS, RetainHandling
+from zmqtt.types import Message, QoS, RetainHandling
 
 __all__ = [
     "MQTTClient",

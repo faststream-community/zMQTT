@@ -5,7 +5,7 @@
 Pass `version="5.0"` to `create_client()` (see [Version selection](../connecting.md#version-selection)):
 
 ```python
-from fastmqtt import create_client
+from zmqtt import create_client
 
 async with create_client("localhost", version="5.0") as client:
     ...
@@ -28,7 +28,7 @@ async with create_client("localhost", version="5.0", session_expiry_interval=360
 `PublishProperties` can be attached to any `publish()` call on a 5.0 connection:
 
 ```python
-from fastmqtt.packets.properties import PublishProperties
+from zmqtt.packets.properties import PublishProperties
 
 props = PublishProperties(
     message_expiry_interval=300,       # broker discards after 300 s

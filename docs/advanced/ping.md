@@ -18,7 +18,7 @@ rtt = await client.ping(timeout=5.0)   # raises MQTTTimeoutError if no response 
 Default timeout is 10 seconds. `MQTTTimeoutError` is raised if PINGRESP does not arrive within the timeout.
 
 ```python
-from fastmqtt.errors import MQTTTimeoutError
+from zmqtt.errors import MQTTTimeoutError
 
 try:
     rtt = await client.ping(timeout=2.0)

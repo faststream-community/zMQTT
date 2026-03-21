@@ -2,27 +2,27 @@
 
 ## Factory
 
-::: fastmqtt.client.create_client
+::: zmqtt.client.create_client
     options:
       show_source: false
 
 ## Client protocols
 
-::: fastmqtt.client.MQTTClientV311
+::: zmqtt.client.MQTTClientV311
     options:
       show_source: false
 
-::: fastmqtt.client.MQTTClientV5
+::: zmqtt.client.MQTTClientV5
     options:
       show_source: false
 
 ## Core classes
 
-::: fastmqtt.client.MQTTClient
+::: zmqtt.client.MQTTClient
     options:
       show_source: false
 
-::: fastmqtt.client.Subscription
+::: zmqtt.client.Subscription
     options:
       show_source: false
       members:
@@ -32,7 +32,7 @@
         - __aiter__
         - __anext__
 
-::: fastmqtt.types.Message
+::: zmqtt.types.Message
     options:
       show_source: false
       members:
@@ -45,52 +45,52 @@
 
 ## Configuration
 
-::: fastmqtt.client.ReconnectConfig
+::: zmqtt.client.ReconnectConfig
     options:
       show_source: false
 
 ## Enumerations
 
-::: fastmqtt.types.QoS
+::: zmqtt.types.QoS
     options:
       show_source: false
 
-::: fastmqtt.types.RetainHandling
+::: zmqtt.types.RetainHandling
     options:
       show_source: false
 
 ## Properties (MQTT 5.0)
 
-::: fastmqtt.packets.properties.PublishProperties
+::: zmqtt.packets.properties.PublishProperties
     options:
       show_source: false
 
-::: fastmqtt.packets.properties.ConnectProperties
+::: zmqtt.packets.properties.ConnectProperties
     options:
       show_source: false
 
-::: fastmqtt.packets.properties.AuthProperties
+::: zmqtt.packets.properties.AuthProperties
     options:
       show_source: false
 
 ## Exceptions
 
-::: fastmqtt.errors.MQTTError
+::: zmqtt.errors.MQTTError
     options:
       show_source: false
 
-::: fastmqtt.errors.MQTTConnectError
+::: zmqtt.errors.MQTTConnectError
     options:
       show_source: false
 
-::: fastmqtt.errors.MQTTProtocolError
+::: zmqtt.errors.MQTTProtocolError
     options:
       show_source: false
 
-::: fastmqtt.errors.MQTTDisconnectedError
+::: zmqtt.errors.MQTTDisconnectedError
     options:
       show_source: false
 
-::: fastmqtt.errors.MQTTTimeoutError
+::: zmqtt.errors.MQTTTimeoutError
     options:
       show_source: false

@@ -1,8 +1,8 @@
-"""Tests for fastmqtt.types and fastmqtt.errors."""
+"""Tests for zmqtt.types and zmqtt.errors."""
 
 import pytest
 
-from fastmqtt.types import (
+from zmqtt.types import (
     Topic,
     TopicFilter,
 )

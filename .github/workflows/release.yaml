@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release & Publish
+    runs-on: ubuntu-latest
+    concurrency: release
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Python Semantic Release
+        id: release
+        uses: python-semantic-release/python-semantic-release@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: astral-sh/setup-uv@v7
+        if: steps.release.outputs.released == 'true'
+        with:
+          python-version: "3.11"
+
+      - name: Build
+        if: steps.release.outputs.released == 'true'
+        run: uv build
+
+      - name: Publish to PyPI
+        if: steps.release.outputs.released == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

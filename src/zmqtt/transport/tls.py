@@ -1,7 +1,7 @@
 import asyncio
 import ssl
 
-from fastmqtt.transport.base import StreamTransport
+from zmqtt.transport.base import StreamTransport
 
 
 async def open_tls(

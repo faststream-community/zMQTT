@@ -1,9 +1,9 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
-from fastmqtt.packets.properties import PubAckProperties, PublishProperties
-from fastmqtt.packets.types import Packet, PacketType
-from fastmqtt.types import QoS
+from zmqtt.packets.properties import PubAckProperties, PublishProperties
+from zmqtt.packets.types import Packet, PacketType
+from zmqtt.types import QoS
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

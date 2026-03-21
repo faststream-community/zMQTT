@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
-from fastmqtt.packets.properties import AuthProperties
-from fastmqtt.packets.types import Packet, PacketType
+from zmqtt.packets.properties import AuthProperties
+from zmqtt.packets.types import Packet, PacketType
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

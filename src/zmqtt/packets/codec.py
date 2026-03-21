@@ -3,7 +3,7 @@
 import struct
 from typing import Literal
 
-from fastmqtt.packets._wire import (
+from zmqtt.packets._wire import (
     decode_bytes_field,
     decode_str,
     decode_varint,
@@ -11,11 +11,11 @@ from fastmqtt.packets._wire import (
     encode_str,
     encode_varint,
 )
-from fastmqtt.packets.auth import Auth
-from fastmqtt.packets.connect import ConnAck, Connect, Will
-from fastmqtt.packets.disconnect import Disconnect
-from fastmqtt.packets.ping import PingReq, PingResp
-from fastmqtt.packets.properties import (
+from zmqtt.packets.auth import Auth
+from zmqtt.packets.connect import ConnAck, Connect, Will
+from zmqtt.packets.disconnect import Disconnect
+from zmqtt.packets.ping import PingReq, PingResp
+from zmqtt.packets.properties import (
     decode_connack_properties,
     decode_connect_properties,
     decode_disconnect_properties,
@@ -39,18 +39,18 @@ from fastmqtt.packets.properties import (
     encode_will_properties,
     encode_auth_properties,
 )
-from fastmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
-from fastmqtt.packets.subscribe import (
+from zmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
+from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from fastmqtt.packets.types import PacketType
-from fastmqtt.types import QoS, RetainHandling
+from zmqtt.packets.types import PacketType
+from zmqtt.types import QoS, RetainHandling
 
-# Re-export wire helpers so existing callers of ``from fastmqtt.packets.codec import …`` keep working.
+# Re-export wire helpers so existing callers of ``from zmqtt.packets.codec import …`` keep working.
 __all__ = [
     "encode_varint",
     "decode_varint",

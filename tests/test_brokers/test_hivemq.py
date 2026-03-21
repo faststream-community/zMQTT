@@ -1,4 +1,4 @@
-from fastmqtt.client import Subscription
+from zmqtt.client import Subscription
 from tests.test_brokers._base import BrokerTestBase
 
 
