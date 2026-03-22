@@ -1,10 +1,13 @@
-from zmqtt.client import Subscription
 from tests.test_brokers._base import BrokerTestBase
+from zmqtt.client import Subscription
 
 
 class BaseTestHiveMQ(BrokerTestBase):
     async def handle_sub_duplicates(
-        self, *, sub: Subscription, n_duplicates: int
+        self,
+        *,
+        sub: Subscription,
+        n_duplicates: int,  # noqa: ARG002
     ) -> None:
         assert sub._queue.empty()
 

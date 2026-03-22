@@ -11,22 +11,24 @@ jobs:
     name: Release & Publish
     runs-on: ubuntu-latest
     concurrency: release
+    environment: release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
           fetch-depth: 0
 
       - name: Python Semantic Release
         id: release
-        uses: python-semantic-release/python-semantic-release@v9
+        uses: python-semantic-release/python-semantic-release@0dc72ac9058a62054a45f6344c83a423d7f906a8  # v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         if: steps.release.outputs.released == 'true'
         with:
           python-version: "3.11"
+          enable-cache: false
 
       - name: Build
         if: steps.release.outputs.released == 'true'
@@ -34,6 +36,6 @@ jobs:
 
       - name: Publish to PyPI
         if: steps.release.outputs.released == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e  # release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}

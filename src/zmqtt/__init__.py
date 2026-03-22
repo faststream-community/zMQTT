@@ -1,7 +1,7 @@
 from zmqtt.client import (
     MQTTClient,
-    MQTTClientV311,
     MQTTClientV5,
+    MQTTClientV311,
     ReconnectConfig,
     Subscription,
     create_client,
@@ -10,12 +10,12 @@ from zmqtt.types import Message, QoS, RetainHandling
 
 __all__ = [
     "MQTTClient",
-    "MQTTClientV311",
     "MQTTClientV5",
-    "ReconnectConfig",
-    "Subscription",
-    "create_client",
+    "MQTTClientV311",
     "Message",
     "QoS",
+    "ReconnectConfig",
     "RetainHandling",
+    "Subscription",
+    "create_client",
 ]

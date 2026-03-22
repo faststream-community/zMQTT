@@ -1,10 +1,13 @@
 """High-level MQTT client — public API layer."""
 
 import asyncio
+import contextlib
 import ssl
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import AsyncIterator, Final, Literal, Protocol, overload
+from typing import Final, Literal, Protocol, overload
+
+from typing_extensions import Self
 
 from zmqtt._compat import defer_cancellation
 from zmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
@@ -39,7 +42,9 @@ class ReconnectConfig:
 
 
 async def _default_transport_factory(
-    host: str, port: int, tls: ssl.SSLContext | bool
+    host: str,
+    port: int,
+    tls: ssl.SSLContext | bool,
 ) -> Transport:
     if tls is False:
         return await open_tcp(host, port)
@@ -51,7 +56,7 @@ async def _default_transport_factory(
 class MQTTClientV311(Protocol):
     """Type-safe view of MQTTClient for MQTT 3.1.1 connections."""
 
-    async def __aenter__(self) -> "MQTTClientV311": ...
+    async def __aenter__(self) -> Self: ...
     async def __aexit__(self, *exc: object) -> None: ...
 
     async def publish(
@@ -77,7 +82,7 @@ class MQTTClientV311(Protocol):
 class MQTTClientV5(Protocol):
     """Type-safe view of MQTTClient for MQTT 5.0 connections."""
 
-    async def __aenter__(self) -> "MQTTClientV5": ...
+    async def __aenter__(self) -> Self: ...
     async def __aexit__(self, *exc: object) -> None: ...
 
     async def publish(
@@ -133,9 +138,10 @@ class Subscription:
         self._retain_as_published = retain_as_published
         self._registered_filters: list[str] = []
 
-    async def __aenter__(self) -> "Subscription":
+    async def __aenter__(self) -> Self:
         if self._client._protocol is None:
-            raise MQTTDisconnectedError("Not connected")
+            msg = "Not connected"
+            raise MQTTDisconnectedError(msg)
         self._client._subscriptions.append(self)
         await self._do_subscribe(self._client._protocol)
         return self
@@ -144,15 +150,9 @@ class Subscription:
         self._client._subscriptions.remove(self)
         await self._cancel_relays()
         being_cancelled = isinstance(exc[1], asyncio.CancelledError)
-        if (
-            not being_cancelled
-            and self._registered_filters
-            and self._client._protocol is not None
-        ):
-            try:
+        if not being_cancelled and self._registered_filters and self._client._protocol is not None:
+            with contextlib.suppress(Exception):
                 await self._client._protocol.unsubscribe(self._registered_filters)
-            except Exception:
-                pass
 
     async def _do_subscribe(self, protocol: MQTTProtocol) -> None:
         reqs = [
@@ -228,16 +228,14 @@ class MQTTClient:
         self._password = password
         self._tls = tls
         self._reconnect = reconnect or ReconnectConfig()
-        self._transport_factory: TransportFactory = (
-            transport_factory or _default_transport_factory
-        )
+        self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
         self._session_expiry_interval = session_expiry_interval
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
         self._run_task: asyncio.Task[None] | None = None
 
-    async def __aenter__(self) -> "MQTTClient":
+    async def __aenter__(self) -> Self:
         await self._connect()
         self._run_task = asyncio.create_task(self._run_loop())
         return self
@@ -262,9 +260,11 @@ class MQTTClient:
         properties: PublishProperties | None = None,
     ) -> None:
         if self._protocol is None:
-            raise MQTTDisconnectedError("Not connected")
+            msg = "Not connected"
+            raise MQTTDisconnectedError(msg)
         if properties is not None and self._version != "5.0":
-            raise RuntimeError("properties require MQTT 5.0")
+            msg = "properties require MQTT 5.0"
+            raise RuntimeError(msg)
         if isinstance(payload, str):
             payload = payload.encode()
         await self._protocol.publish(
@@ -275,13 +275,14 @@ class MQTTClient:
                 retain=retain,
                 dup=False,
                 properties=properties,
-            )
+            ),
         )
 
     async def ping(self, timeout: float = 10.0) -> float:
         """Send PINGREQ and return RTT in seconds when PINGRESP is received."""
         if self._protocol is None:
-            raise MQTTDisconnectedError("Not connected")
+            msg = "Not connected"
+            raise MQTTDisconnectedError(msg)
         return await self._protocol.ping(timeout=timeout)
 
     def subscribe(
@@ -294,7 +295,8 @@ class MQTTClient:
         retain_as_published: bool = False,
     ) -> Subscription:
         if (no_local or retain_as_published) and self._version != "5.0":
-            raise RuntimeError("no_local and retain_as_published require MQTT 5.0")
+            msg = "no_local and retain_as_published require MQTT 5.0"
+            raise RuntimeError(msg)
         return Subscription(
             self,
             list(filters),
@@ -308,9 +310,11 @@ class MQTTClient:
     async def auth(self, method: str, data: bytes | None = None) -> None:
         """Send AUTH packet for enhanced authentication (MQTT 5.0 only)."""
         if self._version != "5.0":
-            raise RuntimeError("AUTH requires MQTT 5.0")
+            msg = "AUTH requires MQTT 5.0"
+            raise RuntimeError(msg)
         if self._protocol is None:
-            raise MQTTDisconnectedError("Not connected")
+            msg = "Not connected"
+            raise MQTTDisconnectedError(msg)
 
         props = AuthProperties(authentication_method=method, authentication_data=data)
         await self._protocol.send_auth(Auth(reason_code=0x18, properties=props))
@@ -326,7 +330,7 @@ class MQTTClient:
         connect_props = None
         if self._version == "5.0":
             connect_props = ConnectProperties(
-                session_expiry_interval=self._session_expiry_interval
+                session_expiry_interval=self._session_expiry_interval,
             )
         connect_packet = Connect(
             client_id=self._client_id,
@@ -343,12 +347,14 @@ class MQTTClient:
             raise
         self._protocol = protocol
 
-    async def _run_loop(self) -> None:
+    async def _run_loop(self) -> None:  # noqa: C901
         delay = self._reconnect.initial_delay
         subs_to_restore: list[Subscription] = []
 
         while True:
-            assert self._protocol is not None
+            if self._protocol is None:
+                msg = "Not connected yet"
+                raise RuntimeError(msg)
             protocol_run_task = asyncio.create_task(self._protocol.run())
             try:
                 # Run the protocol as a sub-task so _read_loop is live while we
@@ -365,10 +371,8 @@ class MQTTClient:
                 if not self._reconnect.enabled:
                     raise
                 # Close the dead transport to release the file descriptor.
-                try:
+                with contextlib.suppress(Exception):
                     await self._protocol._transport.close()
-                except Exception:
-                    pass
             else:
                 return  # clean disconnect — protocol.disconnect() was called
 
@@ -382,13 +386,11 @@ class MQTTClient:
                     delay = self._reconnect.initial_delay
                     log.info("Successfully reconnected")
                     break
-                except Exception:
+                except Exception:  # noqa: BLE001
                     log.warning("Reconnect failed", exc_info=True)
                     if self._protocol is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             await self._protocol.disconnect()
-                        except Exception:
-                            pass
                         self._protocol = None
                     delay = min(
                         delay * self._reconnect.backoff_factor,

@@ -16,6 +16,7 @@ from zmqtt.packets.connect import ConnAck, Connect, Will
 from zmqtt.packets.disconnect import Disconnect
 from zmqtt.packets.ping import PingReq, PingResp
 from zmqtt.packets.properties import (
+    decode_auth_properties,
     decode_connack_properties,
     decode_connect_properties,
     decode_disconnect_properties,
@@ -26,7 +27,7 @@ from zmqtt.packets.properties import (
     decode_unsuback_properties,
     decode_unsubscribe_properties,
     decode_will_properties,
-    decode_auth_properties,
+    encode_auth_properties,
     encode_connack_properties,
     encode_connect_properties,
     encode_disconnect_properties,
@@ -37,9 +38,8 @@ from zmqtt.packets.properties import (
     encode_unsuback_properties,
     encode_unsubscribe_properties,
     encode_will_properties,
-    encode_auth_properties,
 )
-from zmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
+from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,
@@ -52,10 +52,10 @@ from zmqtt.types import QoS, RetainHandling
 
 # Re-export wire helpers so existing callers of ``from zmqtt.packets.codec import …`` keep working.
 __all__ = [
-    "encode_varint",
+    "decode",
     "decode_varint",
     "encode",
-    "decode",
+    "encode_varint",
 ]
 
 AnyPacket = (
@@ -101,11 +101,7 @@ def _encode_connect(packet: Connect, version: Literal["3.1.1", "5.0"]) -> bytes:
         flags |= 0x40
 
     proto_level = 0x05 if version == "5.0" else 0x04
-    var_header = (
-        encode_str("MQTT")
-        + bytes([proto_level, flags])
-        + struct.pack("!H", packet.keepalive)
-    )
+    var_header = encode_str("MQTT") + bytes([proto_level, flags]) + struct.pack("!H", packet.keepalive)
 
     if version == "5.0":
         var_header += encode_connect_properties(packet.properties)
@@ -136,7 +132,9 @@ def _encode_publish(packet: Publish, version: Literal["3.1.1", "5.0"]) -> bytes:
     flags = (packet.dup << 3) | (packet.qos << 1) | packet.retain
     body = encode_str(packet.topic)
     if packet.qos != QoS.AT_MOST_ONCE:
-        assert packet.packet_id is not None
+        if packet.packet_id is None:
+            msg = "Cannot publish without packet id"
+            raise ValueError(msg)
         body += struct.pack("!H", packet.packet_id)
     if version == "5.0":
         body += encode_publish_properties(packet.properties)
@@ -166,12 +164,7 @@ def _encode_subscribe(packet: Subscribe, version: Literal["3.1.1", "5.0"]) -> by
     for sub in packet.subscriptions:
         body += encode_str(sub.topic_filter)
         if version == "5.0":
-            options = (
-                sub.qos
-                | (sub.no_local << 2)
-                | (sub.retain_as_published << 3)
-                | (sub.retain_handling << 4)
-            )
+            options = sub.qos | (sub.no_local << 2) | (sub.retain_as_published << 3) | (sub.retain_handling << 4)
         else:
             options = sub.qos
         body += bytes([options])
@@ -207,7 +200,7 @@ def _encode_unsuback(packet: UnsubAck, version: Literal["3.1.1", "5.0"]) -> byte
 def _encode_disconnect(packet: Disconnect, version: Literal["3.1.1", "5.0"]) -> bytes:
     if version == "5.0" and (packet.reason_code != 0 or packet.properties is not None):
         body = bytes([packet.reason_code]) + encode_disconnect_properties(
-            packet.properties
+            packet.properties,
         )
         return _build_packet(PacketType.DISCONNECT, 0, body)
     return _build_packet(PacketType.DISCONNECT, 0, b"")
@@ -223,27 +216,46 @@ def encode(packet: AnyPacket, *, version: Literal["3.1.1", "5.0"]) -> bytes:
             return _encode_publish(packet, version)
         case PubAck(packet_id=pid, reason_code=rc, properties=props):
             return _encode_pub_ack_variant(
-                PacketType.PUBACK, 0, pid, rc, props, version
+                PacketType.PUBACK,
+                0,
+                pid,
+                rc,
+                props,
+                version,
             )
         case PubRec(packet_id=pid, reason_code=rc, properties=props):
             return _encode_pub_ack_variant(
-                PacketType.PUBREC, 0, pid, rc, props, version
+                PacketType.PUBREC,
+                0,
+                pid,
+                rc,
+                props,
+                version,
             )
         case PubRel(packet_id=pid, reason_code=rc, properties=props):
             return _encode_pub_ack_variant(
-                PacketType.PUBREL, 0b0010, pid, rc, props, version
+                PacketType.PUBREL,
+                0b0010,
+                pid,
+                rc,
+                props,
+                version,
             )
         case PubComp(packet_id=pid, reason_code=rc, properties=props):
             return _encode_pub_ack_variant(
-                PacketType.PUBCOMP, 0, pid, rc, props, version
+                PacketType.PUBCOMP,
+                0,
+                pid,
+                rc,
+                props,
+                version,
             )
         case Subscribe():
             return _encode_subscribe(packet, version)
         case SubAck():
             return _encode_suback(packet, version)
         case Unsubscribe():
-            encoded = _encode_unsubscribe(packet, version)
-            return encoded
+            return _encode_unsubscribe(packet, version)
         case UnsubAck():
             return _encode_unsuback(packet, version)
         case PingReq():
@@ -254,20 +266,23 @@ def encode(packet: AnyPacket, *, version: Literal["3.1.1", "5.0"]) -> bytes:
             return _encode_disconnect(packet, version)
         case Auth():
             body = bytes([packet.reason_code]) + encode_auth_properties(
-                packet.properties
+                packet.properties,
             )
             return _build_packet(PacketType.AUTH, 0, body)
         case _:
-            raise ValueError(f"Unknown packet type: {type(packet)}")
+            msg = f"Unknown packet type: {type(packet)}"
+            raise ValueError(msg)
 
 
 def _decode_connect(buf: bytes | memoryview) -> Connect:
     proto_name, pos = decode_str(buf, 0)
     if proto_name != "MQTT":
-        raise ValueError(f"Invalid protocol name: {proto_name!r}")
+        msg = f"Invalid protocol name: {proto_name!r}"
+        raise ValueError(msg)
     proto_level = buf[pos]
     if proto_level not in (0x04, 0x05):
-        raise ValueError(f"Unsupported protocol level: {proto_level}")
+        msg = f"Unsupported protocol level: {proto_level}"
+        raise ValueError(msg)
     ver: Literal["3.1.1", "5.0"] = "5.0" if proto_level == 0x05 else "3.1.1"
     pos += 1
 
@@ -331,22 +346,28 @@ def _decode_connect(buf: bytes | memoryview) -> Connect:
 
 
 def _decode_connack(
-    buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    version: Literal["3.1.1", "5.0"],
 ) -> ConnAck:
     if len(buf) < 2:
-        raise ValueError("CONNACK too short")
+        msg = "CONNACK too short"
+        raise ValueError(msg)
     session_present = bool(buf[0] & 0x01)
     return_code = buf[1]
     props = None
     if version == "5.0" and len(buf) > 2:
         props, _ = decode_connack_properties(buf, 2)
     return ConnAck(
-        session_present=session_present, return_code=return_code, properties=props
+        session_present=session_present,
+        return_code=return_code,
+        properties=props,
     )
 
 
 def _decode_publish(
-    buf: bytes | memoryview, flags: int, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    flags: int,
+    version: Literal["3.1.1", "5.0"],
 ) -> Publish:
     dup = bool(flags & 0x08)
     qos = QoS((flags >> 1) & 0x03)
@@ -357,7 +378,8 @@ def _decode_publish(
     packet_id = None
     if qos != QoS.AT_MOST_ONCE:
         if pos + 2 > len(buf):
-            raise ValueError("PUBLISH too short for packet ID")
+            msg = "PUBLISH too short for packet ID"
+            raise ValueError(msg)
         (packet_id,) = struct.unpack_from("!H", buf, pos)
         pos += 2
 
@@ -378,11 +400,13 @@ def _decode_publish(
 
 
 def _decode_pub_ack_variant(
-    buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    version: Literal["3.1.1", "5.0"],
 ) -> tuple[int, int, object]:
     """Returns (packet_id, reason_code, properties)."""
     if len(buf) < 2:
-        raise ValueError("Packet too short for packet ID")
+        msg = "Packet too short for packet ID"
+        raise ValueError(msg)
     (packet_id,) = struct.unpack_from("!H", buf, 0)
     reason_code = 0
     props = None
@@ -394,10 +418,12 @@ def _decode_pub_ack_variant(
 
 
 def _decode_subscribe(
-    buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    version: Literal["3.1.1", "5.0"],
 ) -> Subscribe:
     if len(buf) < 2:
-        raise ValueError("SUBSCRIBE too short")
+        msg = "SUBSCRIBE too short"
+        raise ValueError(msg)
     (packet_id,) = struct.unpack_from("!H", buf, 0)
     pos = 2
 
@@ -411,7 +437,8 @@ def _decode_subscribe(
         topic_filter, n = decode_str(buf, pos)
         pos += n
         if pos >= len(buf):
-            raise ValueError("SUBSCRIBE missing options byte")
+            msg = "SUBSCRIBE missing options byte"
+            raise ValueError(msg)
         options = buf[pos]
         pos += 1
         qos = QoS(options & 0x03)
@@ -426,20 +453,23 @@ def _decode_subscribe(
                     no_local=no_local,
                     retain_as_published=retain_as_published,
                     retain_handling=retain_handling,
-                )
+                ),
             )
         else:
             subscriptions.append(
-                SubscriptionRequest(topic_filter=topic_filter, qos=qos)
+                SubscriptionRequest(topic_filter=topic_filter, qos=qos),
             )
     return Subscribe(
-        packet_id=packet_id, subscriptions=tuple(subscriptions), properties=props
+        packet_id=packet_id,
+        subscriptions=tuple(subscriptions),
+        properties=props,
     )
 
 
 def _decode_suback(buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]) -> SubAck:
     if len(buf) < 2:
-        raise ValueError("SUBACK too short")
+        msg = "SUBACK too short"
+        raise ValueError(msg)
     (packet_id,) = struct.unpack_from("!H", buf, 0)
     pos = 2
     props = None
@@ -450,10 +480,12 @@ def _decode_suback(buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]) ->
 
 
 def _decode_unsubscribe(
-    buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    version: Literal["3.1.1", "5.0"],
 ) -> Unsubscribe:
     if len(buf) < 2:
-        raise ValueError("UNSUBSCRIBE too short")
+        msg = "UNSUBSCRIBE too short"
+        raise ValueError(msg)
     (packet_id,) = struct.unpack_from("!H", buf, 0)
     pos = 2
     props = None
@@ -466,28 +498,35 @@ def _decode_unsubscribe(
         pos += n
         topic_filters.append(topic_filter)
     return Unsubscribe(
-        packet_id=packet_id, topic_filters=tuple(topic_filters), properties=props
+        packet_id=packet_id,
+        topic_filters=tuple(topic_filters),
+        properties=props,
     )
 
 
 def _decode_unsuback(
-    buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    version: Literal["3.1.1", "5.0"],
 ) -> UnsubAck:
     if len(buf) < 2:
-        raise ValueError("UNSUBACK too short")
+        msg = "UNSUBACK too short"
+        raise ValueError(msg)
     (packet_id,) = struct.unpack_from("!H", buf, 0)
     if version == "5.0":
         pos = 2
         props, n = decode_unsuback_properties(buf, pos)
         pos += n
         return UnsubAck(
-            packet_id=packet_id, reason_codes=tuple(buf[pos:]), properties=props
+            packet_id=packet_id,
+            reason_codes=tuple(buf[pos:]),
+            properties=props,
         )
     return UnsubAck(packet_id=packet_id)
 
 
 def _decode_disconnect(
-    buf: bytes | memoryview, version: Literal["3.1.1", "5.0"]
+    buf: bytes | memoryview,
+    version: Literal["3.1.1", "5.0"],
 ) -> Disconnect:
     reason_code = 0
     props = None
@@ -499,7 +538,9 @@ def _decode_disconnect(
 
 
 def decode(
-    buffer: bytes | memoryview, *, version: Literal["3.1.1", "5.0"] = "3.1.1"
+    buffer: bytes | memoryview,
+    *,
+    version: Literal["3.1.1", "5.0"] = "3.1.1",
 ) -> tuple[AnyPacket, int] | None:
     """Decode one packet from buffer.
 
@@ -528,7 +569,8 @@ def decode(
             break
         multiplier *= 128
     else:
-        raise ValueError("Remaining-length varint exceeds 4 bytes")
+        msg = "Remaining-length varint exceeds 4 bytes"
+        raise ValueError(msg)
 
     total = 1 + varint_bytes + remaining_length
     if len(buffer) < total:
@@ -536,8 +578,9 @@ def decode(
 
     try:
         packet_type = PacketType(packet_type_val)
-    except ValueError:
-        raise ValueError(f"Unknown MQTT packet type: {packet_type_val}")
+    except ValueError as e:
+        msg = f"Unknown MQTT packet type: {packet_type_val}"
+        raise ValueError(msg) from e
 
     body = buffer[1 + varint_bytes : total]
 
@@ -576,13 +619,15 @@ def decode(
             packet = _decode_disconnect(body, version)
         case PacketType.AUTH:
             if len(body) < 1:
-                raise ValueError("AUTH too short")
+                msg = "AUTH too short"
+                raise ValueError(msg)
             auth_rc = body[0]
             auth_props = None
             if len(body) > 1:
                 auth_props, _ = decode_auth_properties(body, 1)
             packet = Auth(reason_code=auth_rc, properties=auth_props)
         case _:
-            raise ValueError(f"Unsupported packet type: {packet_type}")
+            msg = f"Unsupported packet type: {packet_type}"
+            raise ValueError(msg)
 
     return packet, total

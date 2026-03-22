@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from typing import Protocol, runtime_checkable
 
 from zmqtt.errors import MQTTDisconnectedError
@@ -18,7 +19,9 @@ class StreamTransport:
     """Asyncio StreamReader/StreamWriter pair wrapped as a Transport."""
 
     def __init__(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -29,7 +32,8 @@ class StreamTransport:
         data = await self._reader.read(n)
         if not data:
             self._closed = True
-            raise MQTTDisconnectedError("Connection closed by remote")
+            msg = "Connection closed by remote"
+            raise MQTTDisconnectedError(msg)
         return data
 
     async def write(self, data: bytes) -> None:
@@ -41,10 +45,8 @@ class StreamTransport:
         if not self._writer_closed:
             self._writer_closed = True
             self._writer.close()
-        try:
+        with contextlib.suppress(Exception):
             await self._writer.wait_closed()
-        except Exception:
-            pass
 
     @property
     def is_connected(self) -> bool:

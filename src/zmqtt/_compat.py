@@ -5,7 +5,6 @@ import contextlib
 import sys
 from collections.abc import AsyncGenerator
 
-
 if sys.version_info >= (3, 11):
 
     @contextlib.asynccontextmanager

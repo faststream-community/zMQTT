@@ -2,14 +2,15 @@
 
 import pytest
 
+from zmqtt.packets._wire import encode_varint
 from zmqtt.packets.properties import (
     AuthProperties,
     ConnAckProperties,
     ConnectProperties,
     DisconnectProperties,
+    PropertyID,
     PubAckProperties,
     PublishProperties,
-    PropertyID,
     SubAckProperties,
     SubscribeProperties,
     UnsubAckProperties,
@@ -19,28 +20,27 @@ from zmqtt.packets.properties import (
     decode_connack_properties,
     decode_connect_properties,
     decode_disconnect_properties,
-    decode_publish_properties,
+    decode_props_block,
     decode_puback_properties,
+    decode_publish_properties,
     decode_suback_properties,
     decode_subscribe_properties,
     decode_unsuback_properties,
     decode_unsubscribe_properties,
     decode_will_properties,
-    decode_props_block,
     encode_auth_properties,
     encode_connack_properties,
     encode_connect_properties,
     encode_disconnect_properties,
-    encode_publish_properties,
+    encode_props_block,
     encode_puback_properties,
+    encode_publish_properties,
     encode_suback_properties,
     encode_subscribe_properties,
     encode_unsuback_properties,
     encode_unsubscribe_properties,
     encode_will_properties,
-    encode_props_block,
 )
-from zmqtt.packets._wire import encode_varint
 
 
 def test_empty_props_block() -> None:
@@ -156,7 +156,8 @@ def test_connect_properties_roundtrip_full() -> None:
 
 def test_connect_properties_bool_flags() -> None:
     props = ConnectProperties(
-        request_response_information=False, request_problem_information=True
+        request_response_information=False,
+        request_problem_information=True,
     )
     raw = encode_connect_properties(props)
     decoded, _ = decode_connect_properties(raw, 0)

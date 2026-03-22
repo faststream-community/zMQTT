@@ -1,6 +1,6 @@
 """Tests for MQTT 5.0 packet encode/decode via zmqtt.packets.codec."""
 
-from typing import Any, Literal
+from typing import Literal
 
 import pytest
 
@@ -18,6 +18,7 @@ from zmqtt.packets.properties import (
     SubAckProperties,
     SubscribeProperties,
     UnsubAckProperties,
+    UnsubscribeProperties,
     WillProperties,
 )
 from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
@@ -31,7 +32,7 @@ from zmqtt.packets.subscribe import (
 from zmqtt.types import QoS, RetainHandling
 
 
-def roundtrip(packet: Any, version: Literal["3.1.1", "5.0"] = "5.0") -> AnyPacket:
+def roundtrip(packet: AnyPacket, version: Literal["3.1.1", "5.0"] = "5.0") -> AnyPacket:
     raw = encode(packet, version=version)
     result = decode(raw, version=version)
     assert result is not None
@@ -84,7 +85,8 @@ def test_v5_connect_with_will_and_will_properties() -> None:
 
 def test_v5_connect_full() -> None:
     connect_props = ConnectProperties(
-        session_expiry_interval=60, user_properties=(("k", "v"),)
+        session_expiry_interval=60,
+        user_properties=(("k", "v"),),
     )
     will_props = WillProperties(message_expiry_interval=120, correlation_data=b"\xab")
     will = Will(
@@ -145,7 +147,11 @@ def test_v5_connack_with_properties() -> None:
 
 def test_v5_publish_qos0_no_properties() -> None:
     pkt = Publish(
-        topic="a/b", payload=b"hello", qos=QoS.AT_MOST_ONCE, retain=False, dup=False
+        topic="a/b",
+        payload=b"hello",
+        qos=QoS.AT_MOST_ONCE,
+        retain=False,
+        dup=False,
     )
     out = roundtrip(pkt)
     assert isinstance(out, Publish)
@@ -283,7 +289,6 @@ def test_v5_suback_with_properties() -> None:
 
 
 def test_v5_unsubscribe_with_properties() -> None:
-    from zmqtt.packets.properties import UnsubscribeProperties
 
     props = UnsubscribeProperties(user_properties=(("req", "1"),))
     pkt = Unsubscribe(packet_id=9, topic_filters=("a/b", "c/d"), properties=props)
@@ -370,7 +375,8 @@ def test_v311_connect_ignores_properties() -> None:
 
 def test_v311_disconnect_empty() -> None:
     pkt = Disconnect(
-        reason_code=0x8E, properties=DisconnectProperties(reason_string="x")
+        reason_code=0x8E,
+        properties=DisconnectProperties(reason_string="x"),
     )
     raw = encode(pkt, version="3.1.1")
     result = decode(raw, version="3.1.1")

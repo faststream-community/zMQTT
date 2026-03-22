@@ -39,5 +39,5 @@ class ConnAck(Packet):
     packet_type: ClassVar[PacketType] = PacketType.CONNACK
 
     session_present: bool
-    return_code: int  # 0 = accepted; 1–5 = refused (v3.1.1) / reason code (v5)
+    return_code: int  # 0 = accepted; 1-5 = refused (v3.1.1) / reason code (v5)
     properties: ConnAckProperties | None = None  # v5 only

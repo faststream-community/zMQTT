@@ -3,23 +3,49 @@ name = "zmqtt"
 version = "0.0.1-alpha.3"
 description = "Pure asyncio MQTT 3.1.1/5.0 client library"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "borisalekseev", email = "i.borisalekseev@gmail.com" }
 ]
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["mqtt", "mqtt5", "iot", "python-mqtt", "zmqtt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/faststream-community/zMQTT"
+Repository = "https://github.com/faststream-community/zMQTT"
+Documentation = "https://faststream-community.github.io/zMQTT/"
+Issues = "https://github.com/faststream-community/zMQTT/issues"
 
 [build-system]
-requires = ["uv_build>=0.9.7,<0.10.0"]
+requires = ["uv_build>=0.9.7,<0.11.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "bandit>=1.9.4",
     "mypy>=1.19.1",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
     "ruff>=0.15.5",
+    "semgrep>=1.156.0",
+    "zizmor>=1.23.1",
     {include-group = "docs"},
 ]
 docs = [
@@ -37,6 +63,17 @@ python_version = "3.10"
 src = ["src"]
 include = ["src/**.py", "tests/**.py"]
 target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = ["D", "COM812"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D", "PLR2004", "SLF001", "FBT001"]
+"src/zmqtt/protocol.py" = ["SLF001"]
+"src/zmqtt/packets/codec.py" = ["PLR", "C901"]
+"src/zmqtt/client.py" = ["PLR0913", "SLF001", "FBT"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

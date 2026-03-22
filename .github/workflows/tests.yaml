@@ -5,6 +5,9 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     name: Python ${{ matrix.python-version }}
@@ -32,21 +35,23 @@ jobs:
           --security-opt no-new-privileges:true
 
       hivemq:
-        image: hivemq/hivemq-ce:latest
+        image: hivemq/hivemq-ce@sha256:7ae39e84654a41ced6e946dd84f131d508bc2b862ec96265b7f23d241db214da  # latest
         ports:
           - 1886:1883
         options: >-
           --security-opt no-new-privileges:true
 
       nanomq:
-        image: emqx/nanomq:latest
+        image: emqx/nanomq@sha256:cf010e7b78981b051cdb833921207991daaf46dccce1ab12dd8d7ec433147161  # latest
         ports:
           - 1887:1883
         options: >-
           --security-opt no-new-privileges:true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Setup mosquitto config
         run: |
@@ -73,13 +78,15 @@ jobs:
             nc -zv localhost $port || echo "Port $port not responding"
           done
 
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
           files: coverage.xml
 
@@ -92,7 +99,9 @@ jobs:
         python-version: ["3.10", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install and start mosquitto
         run: |
@@ -101,12 +110,12 @@ jobs:
           $(brew --prefix)/sbin/mosquitto -c /tmp/mosquitto.conf -d
           sleep 2
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
           files: coverage.xml
 
@@ -119,7 +128,9 @@ jobs:
         python-version: ["3.10", "3.14"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install and start mosquitto
         shell: pwsh
@@ -129,12 +140,12 @@ jobs:
           Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" -ArgumentList "-c $env:TEMP\mosquitto.conf" -WindowStyle Hidden
           Start-Sleep -Seconds 3
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
       - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
           files: coverage.xml
 
@@ -144,6 +155,6 @@ jobs:
     needs: [tests, tests-macos, tests-windows]
     runs-on: ubuntu-latest
     steps:
-      - uses: re-actors/alls-green@release/v1
+      - uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe  # release/v1
         with:
           jobs: ${{ toJSON(needs) }}

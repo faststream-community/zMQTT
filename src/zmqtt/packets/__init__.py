@@ -17,7 +17,7 @@ from zmqtt.packets.properties import (
     UnsubscribeProperties,
     WillProperties,
 )
-from zmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
+from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,

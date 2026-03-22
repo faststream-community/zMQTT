@@ -5,16 +5,36 @@ on:
   push:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
         with:
           python-version: "3.13"
       - run: uv sync --group dev
       - run: uv run ruff check src tests
       - run: uv run ruff format --check src tests
       - run: uv run mypy
+
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+        with:
+          python-version: "3.13"
+      - run: uv sync --group dev
+      - run: uv run bandit -c pyproject.toml -r src
+      - run: uv run semgrep scan --config auto --error src
+      - run: uv run zizmor .

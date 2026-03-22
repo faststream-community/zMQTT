@@ -3,22 +3,26 @@
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from zmqtt.packets.publish import PubAck, PubComp, Publish
-from zmqtt.packets.subscribe import SubAck, UnsubAck
 from zmqtt.types import Message
+
+if TYPE_CHECKING:
+    from zmqtt.packets.subscribe import SubAck, UnsubAck
 
 
 class PacketIdPool:
-    """Allocates 16-bit packet IDs (range 1–65535); reuses after release."""
+    """Allocates 16-bit packet IDs (range 1-65535); reuses after release."""
 
     def __init__(self) -> None:
         self._next: int = 1
         self._in_use: set[int] = set()
 
     def acquire(self) -> int:
-        if len(self._in_use) >= 65535:
-            raise RuntimeError("All 65535 packet IDs are in use")
+        if len(self._in_use) >= 65535:  # noqa: PLR2004
+            msg = "All 65535 packet IDs are in use"
+            raise RuntimeError(msg)
         while self._next in self._in_use:
             self._next = self._next % 65535 + 1
         pid = self._next
@@ -28,8 +32,7 @@ class PacketIdPool:
 
     def release(self, pid: int) -> None:
         self._in_use.discard(pid)
-        if pid < self._next:
-            self._next = pid
+        self._next = min(self._next, pid)
 
 
 @dataclass(slots=True)

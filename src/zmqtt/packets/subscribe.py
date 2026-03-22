@@ -37,7 +37,8 @@ class SubAck(Packet):
 
     packet_id: int
     return_codes: tuple[
-        int, ...
+        int,
+        ...,
     ]  # per sub: 0x00/0x01/0x02 = QoS granted, 0x80 = failure
     properties: SubAckProperties | None = None  # v5 only
 

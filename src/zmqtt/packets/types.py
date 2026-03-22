@@ -29,6 +29,6 @@ class FixedHeader:
 
 
 class Packet:
-    """Concrete subclasses must declare: packet_type: ClassVar[PacketType]"""
+    """Concrete subclasses must declare: packet_type: ClassVar[PacketType]."""
 
     packet_type: ClassVar[PacketType]

@@ -1,12 +1,16 @@
 """Internal wire-format helpers: variable-length integers, UTF-8 strings, binary data."""
 
 import struct
+from typing import Final
+
+_MAX_MQTT_VARINT: Final = 268_435_455
 
 
 def encode_varint(value: int) -> bytes:
-    """Encode a non-negative integer as MQTT variable-length integer (1–4 bytes)."""
-    if value < 0 or value > 268_435_455:
-        raise ValueError(f"Value {value} out of varint range")
+    """Encode a non-negative integer as MQTT variable-length integer (1-4 bytes)."""
+    if value < 0 or value > _MAX_MQTT_VARINT:
+        msg = f"Value {value} out of varint range"
+        raise ValueError(msg)
     result = bytearray()
     while True:
         byte = value & 0x7F
@@ -30,13 +34,15 @@ def decode_varint(buf: bytes | memoryview, offset: int = 0) -> tuple[int, int]:
     for i in range(4):
         pos = offset + i
         if pos >= len(buf):
-            raise ValueError("Buffer too short for varint")
+            msg = "Buffer too short for varint"
+            raise ValueError(msg)
         byte = buf[pos]
         value += (byte & 0x7F) * multiplier
         if byte & 0x80 == 0:
             return value, i + 1
         multiplier *= 128
-    raise ValueError("Varint exceeds 4 bytes")
+    msg = "Varint exceeds 4 bytes"
+    raise ValueError(msg)
 
 
 def encode_str(s: str) -> bytes:
@@ -46,11 +52,13 @@ def encode_str(s: str) -> bytes:
 
 def decode_str(buf: bytes | memoryview, offset: int) -> tuple[str, int]:
     if offset + 2 > len(buf):
-        raise ValueError("Buffer too short for string length prefix")
+        msg = "Buffer too short for string length prefix"
+        raise ValueError(msg)
     (length,) = struct.unpack_from("!H", buf, offset)
     end = offset + 2 + length
     if end > len(buf):
-        raise ValueError("Buffer too short for string data")
+        msg = "Buffer too short for string data"
+        raise ValueError(msg)
     return bytes(buf[offset + 2 : end]).decode("utf-8"), 2 + length
 
 
@@ -60,9 +68,11 @@ def encode_bytes_field(data: bytes) -> bytes:
 
 def decode_bytes_field(buf: bytes | memoryview, offset: int) -> tuple[bytes, int]:
     if offset + 2 > len(buf):
-        raise ValueError("Buffer too short for bytes length prefix")
+        msg = "Buffer too short for bytes length prefix"
+        raise ValueError(msg)
     (length,) = struct.unpack_from("!H", buf, offset)
     end = offset + 2 + length
     if end > len(buf):
-        raise ValueError("Buffer too short for bytes data")
+        msg = "Buffer too short for bytes data"
+        raise ValueError(msg)
     return bytes(buf[offset + 2 : end]), 2 + length

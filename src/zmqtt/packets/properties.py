@@ -56,7 +56,7 @@ _WIRE_BYTE = frozenset(
         PropertyID.WILDCARD_SUBSCRIPTION_AVAILABLE,
         PropertyID.SUBSCRIPTION_IDENTIFIER_AVAILABLE,
         PropertyID.SHARED_SUBSCRIPTION_AVAILABLE,
-    }
+    },
 )
 _WIRE_UINT16 = frozenset(
     {
@@ -64,7 +64,7 @@ _WIRE_UINT16 = frozenset(
         PropertyID.RECEIVE_MAXIMUM,
         PropertyID.TOPIC_ALIAS_MAXIMUM,
         PropertyID.TOPIC_ALIAS,
-    }
+    },
 )
 _WIRE_UINT32 = frozenset(
     {
@@ -72,7 +72,7 @@ _WIRE_UINT32 = frozenset(
         PropertyID.SESSION_EXPIRY_INTERVAL,
         PropertyID.WILL_DELAY_INTERVAL,
         PropertyID.MAXIMUM_PACKET_SIZE,
-    }
+    },
 )
 _WIRE_VARINT = frozenset({PropertyID.SUBSCRIPTION_IDENTIFIER})
 _WIRE_STR = frozenset(
@@ -84,13 +84,13 @@ _WIRE_STR = frozenset(
         PropertyID.REASON_STRING,
         PropertyID.RESPONSE_INFORMATION,
         PropertyID.SERVER_REFERENCE,
-    }
+    },
 )
 _WIRE_BYTES_DATA = frozenset(
     {
         PropertyID.CORRELATION_DATA,
         PropertyID.AUTHENTICATION_DATA,
-    }
+    },
 )
 # USER_PROPERTY (0x26) is a repeatable string pair — handled separately.
 
@@ -128,7 +128,8 @@ def encode_props_block(d: dict[PropertyID, Any] | None) -> bytes:
 
 
 def decode_props_block(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[dict[PropertyID, Any], int]:
     """Decode a properties block.
 
@@ -142,8 +143,9 @@ def decode_props_block(
     while pos < end:
         try:
             pid = PropertyID(buf[pos])
-        except ValueError:
-            raise ValueError(f"Unknown property ID: {buf[pos]:#04x}")
+        except ValueError as e:
+            msg = f"Unknown property ID: {buf[pos]:#04x}"
+            raise ValueError(msg) from e
         pos += 1
         if pid in _WIRE_BYTE:
             d[pid] = buf[pos]
@@ -282,9 +284,22 @@ class AuthProperties:
 
 
 _UP = _PID.USER_PROPERTY  # shorthand
+AnyProperties = (
+    ConnectProperties
+    | WillProperties
+    | ConnAckProperties
+    | PublishProperties
+    | PubAckProperties
+    | SubscribeProperties
+    | SubAckProperties
+    | UnsubscribeProperties
+    | UnsubAckProperties
+    | DisconnectProperties
+    | AuthProperties
+)
 
 
-def _up(props: Any) -> dict[PropertyID, Any]:
+def _up(props: AnyProperties) -> dict[PropertyID, Any]:
     """Build a dict with user_properties if non-empty."""
     return {_UP: list(props.user_properties)} if props.user_properties else {}
 
@@ -467,7 +482,8 @@ def _up_tuple(d: dict[PropertyID, Any]) -> tuple[tuple[str, str], ...]:
 
 
 def decode_connect_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[ConnectProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -490,7 +506,8 @@ def decode_connect_properties(
 
 
 def decode_will_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[WillProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -507,7 +524,8 @@ def decode_will_properties(
 
 
 def decode_connack_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[ConnAckProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -516,9 +534,7 @@ def decode_connack_properties(
         session_expiry_interval=d.get(_PID.SESSION_EXPIRY_INTERVAL),
         receive_maximum=d.get(_PID.RECEIVE_MAXIMUM),
         maximum_qos=d.get(_PID.MAXIMUM_QOS),
-        retain_available=bool(d[_PID.RETAIN_AVAILABLE])
-        if _PID.RETAIN_AVAILABLE in d
-        else None,
+        retain_available=bool(d[_PID.RETAIN_AVAILABLE]) if _PID.RETAIN_AVAILABLE in d else None,
         maximum_packet_size=d.get(_PID.MAXIMUM_PACKET_SIZE),
         assigned_client_identifier=d.get(_PID.ASSIGNED_CLIENT_IDENTIFIER),
         topic_alias_maximum=d.get(_PID.TOPIC_ALIAS_MAXIMUM),
@@ -527,7 +543,7 @@ def decode_connack_properties(
         if _PID.WILDCARD_SUBSCRIPTION_AVAILABLE in d
         else None,
         subscription_identifier_available=bool(
-            d[_PID.SUBSCRIPTION_IDENTIFIER_AVAILABLE]
+            d[_PID.SUBSCRIPTION_IDENTIFIER_AVAILABLE],
         )
         if _PID.SUBSCRIPTION_IDENTIFIER_AVAILABLE in d
         else None,
@@ -544,7 +560,8 @@ def decode_connack_properties(
 
 
 def decode_publish_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[PublishProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -562,7 +579,8 @@ def decode_publish_properties(
 
 
 def decode_puback_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[PubAckProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -574,7 +592,8 @@ def decode_puback_properties(
 
 
 def decode_subscribe_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[SubscribeProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -586,7 +605,8 @@ def decode_subscribe_properties(
 
 
 def decode_suback_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[SubAckProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -598,7 +618,8 @@ def decode_suback_properties(
 
 
 def decode_unsubscribe_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[UnsubscribeProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -607,7 +628,8 @@ def decode_unsubscribe_properties(
 
 
 def decode_unsuback_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[UnsubAckProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -619,7 +641,8 @@ def decode_unsuback_properties(
 
 
 def decode_disconnect_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[DisconnectProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:
@@ -633,7 +656,8 @@ def decode_disconnect_properties(
 
 
 def decode_auth_properties(
-    buf: bytes | memoryview, offset: int
+    buf: bytes | memoryview,
+    offset: int,
 ) -> tuple[AuthProperties | None, int]:
     d, n = decode_props_block(buf, offset)
     if not d:

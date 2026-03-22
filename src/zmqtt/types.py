@@ -2,6 +2,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import IntEnum
 
+from typing_extensions import Self
+
 from zmqtt.packets.properties import PublishProperties
 
 
@@ -12,7 +14,9 @@ class QoS(IntEnum):
 
 
 class RetainHandling(IntEnum):
-    """MQTT 5.0 subscription option controlling which retained messages are delivered."""
+    """
+    MQTT 5.0 subscription option controlling which retained messages are delivered.
+    """
 
     SEND_ON_SUBSCRIBE = 0
     SEND_IF_NOT_EXISTS = 1
@@ -21,51 +25,63 @@ class RetainHandling(IntEnum):
 
 def _validate_topic_name(topic: str) -> None:
     if not topic:
-        raise ValueError("Topic must not be empty")
+        msg = "Topic must not be empty"
+        raise ValueError(msg)
     if "#" in topic or "+" in topic:
-        raise ValueError(f"Wildcards not allowed in publish topic: {topic!r}")
+        msg = f"Wildcards not allowed in publish topic: {topic!r}"
+        raise ValueError(msg)
     if "$" in topic[1:]:
+        msg = f"'$' is only valid as the first character of a topic: {topic!r}"
         raise ValueError(
-            f"'$' is only valid as the first character of a topic: {topic!r}"
+            msg,
         )
 
 
 def _validate_topic_filter(topic: str) -> None:
     if not topic:
-        raise ValueError("Topic filter must not be empty")
+        msg = "Topic filter must not be empty"
+        raise ValueError(msg)
     if "$" in topic[1:]:
+        msg = f"'$' is only valid as the first character of a topic filter: {topic!r}"
         raise ValueError(
-            f"'$' is only valid as the first character of a topic filter: {topic!r}"
+            msg,
         )
     if "#" in topic:
         idx = topic.index("#")
         if idx != len(topic) - 1:
+            msg = f"'#' must be the last character in a topic filter: {topic!r}"
             raise ValueError(
-                f"'#' must be the last character in a topic filter: {topic!r}"
+                msg,
             )
         if idx > 0 and topic[idx - 1] != "/":
+            msg = f"'#' must be preceded by '/' in a topic filter: {topic!r}"
             raise ValueError(
-                f"'#' must be preceded by '/' in a topic filter: {topic!r}"
+                msg,
             )
     for level in topic.split("/"):
         if "+" in level and level != "+":
+            msg = f"'+' must occupy an entire topic level in filter: {topic!r}"
             raise ValueError(
-                f"'+' must occupy an entire topic level in filter: {topic!r}"
+                msg,
             )
 
 
 class Topic(str):
     """Validated publish topic — no wildcards, '$' only as first character."""
 
-    def __new__(cls, value: str) -> "Topic":
+    __slots__ = ()
+
+    def __new__(cls, value: str) -> Self:
         _validate_topic_name(value)
         return super().__new__(cls, value)
 
 
 class TopicFilter(str):
-    """Validated subscription filter — wildcards allowed, '$' only as first character."""
+    """Validated subscription filter. Wildcards allowed, '$' only as first character."""
 
-    def __new__(cls, value: str) -> "TopicFilter":
+    __slots__ = ()
+
+    def __new__(cls, value: str) -> Self:
         _validate_topic_filter(value)
         return super().__new__(cls, value)
 
@@ -80,12 +96,17 @@ class Message:
     retain: bool
     properties: PublishProperties | None = None  # v5 only
     _ack_callback: Callable[[], Awaitable[None]] | None = field(
-        default=None, repr=False, init=False
+        default=None,
+        repr=False,
+        init=False,
     )
     _resolved: bool = field(default=False, repr=False, init=False)
 
     async def ack(self) -> None:
-        """Send the protocol-level ack for this message. Idempotent; no-op when auto_ack=True."""
+        """
+        Send the protocol-level ack for this message.
+        Idempotent; no-op when auto_ack=True.
+        """
         if self._resolved:
             return
         object.__setattr__(self, "_resolved", True)

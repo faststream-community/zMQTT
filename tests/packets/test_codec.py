@@ -6,7 +6,7 @@ from zmqtt.packets.codec import decode, decode_varint, encode, encode_varint
 from zmqtt.packets.connect import ConnAck, Connect, Will
 from zmqtt.packets.disconnect import Disconnect
 from zmqtt.packets.ping import PingReq, PingResp
-from zmqtt.packets.publish import PubAck, PubComp, PubRec, PubRel, Publish
+from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt.packets.subscribe import (
     SubAck,
     Subscribe,
@@ -62,9 +62,9 @@ def test_decode_varint_incomplete() -> None:
 
 
 def test_encode_varint_out_of_range() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="out of varint range"):
         encode_varint(268_435_456)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="out of varint range"):
         encode_varint(-1)
 
 
@@ -73,9 +73,7 @@ def test_decode_empty() -> None:
 
 
 def test_decode_one_byte() -> None:
-    assert (
-        decode(b"\xc0") is None
-    )  # PINGREQ fixed header, missing remaining-length byte
+    assert decode(b"\xc0") is None  # PINGREQ fixed header, missing remaining-length byte
 
 
 def test_decode_incomplete_body() -> None:
@@ -181,7 +179,10 @@ def test_connect_with_credentials() -> None:
 
 def test_connect_with_will() -> None:
     will = Will(
-        topic="status/client1", payload=b"offline", qos=QoS.AT_LEAST_ONCE, retain=True
+        topic="status/client1",
+        payload=b"offline",
+        qos=QoS.AT_LEAST_ONCE,
+        retain=True,
     )
     pkt = Connect(client_id="client1", clean_session=True, keepalive=0, will=will)
     data = encode(pkt, version="3.1.1")
@@ -292,7 +293,8 @@ def test_publish_qos2_dup_retain() -> None:
     ],
 )
 def test_pubxxx_roundtrip(
-    packet: PubAck | PubRec | PubRel | PubComp, expected_first_byte: int
+    packet: PubAck | PubRec | PubRel | PubComp,
+    expected_first_byte: int,
 ) -> None:
     data = encode(packet, version="3.1.1")
     assert data[0] == expected_first_byte
@@ -308,9 +310,7 @@ def test_pubxxx_roundtrip(
 def test_subscribe_single() -> None:
     pkt = Subscribe(
         packet_id=10,
-        subscriptions=(
-            SubscriptionRequest(topic_filter="sensors/#", qos=QoS.AT_LEAST_ONCE),
-        ),
+        subscriptions=(SubscriptionRequest(topic_filter="sensors/#", qos=QoS.AT_LEAST_ONCE),),
     )
     data = encode(pkt, version="3.1.1")
     assert data[0] == 0x82  # SUBSCRIBE with reserved flags 0b0010

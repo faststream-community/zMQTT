@@ -113,7 +113,9 @@ def test_inbound_qos2_flight_fields() -> None:
         packet_id=3,
     )
     flight = InboundQoS2Flight(
-        packet_id=3, publish=publish, state=InboundQoS2State.PENDING_PUBREL
+        packet_id=3,
+        publish=publish,
+        state=InboundQoS2State.PENDING_PUBREL,
     )
     assert flight.state is InboundQoS2State.PENDING_PUBREL
 
