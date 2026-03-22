@@ -83,10 +83,65 @@ jobs:
         with:
           files: coverage.xml
 
+  tests-macos:
+    name: Python ${{ matrix.python-version }} (macOS)
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install and start mosquitto
+        run: |
+          brew install mosquitto
+          printf 'listener 1884\nallow_anonymous true\n' > /tmp/mosquitto.conf
+          $(brew --prefix)/sbin/mosquitto -c /tmp/mosquitto.conf -d
+          sleep 2
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev
+      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py
+      - uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+
+  tests-windows:
+    name: Python ${{ matrix.python-version }} (Windows)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install and start mosquitto
+        shell: pwsh
+        run: |
+          winget install -e --id EclipseFoundation.Mosquitto --accept-source-agreements --accept-package-agreements --silent
+          Set-Content -Path "$env:TEMP\mosquitto.conf" -Value "listener 1884`r`nallow_anonymous true"
+          Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" -ArgumentList "-c $env:TEMP\mosquitto.conf" -WindowStyle Hidden
+          Start-Sleep -Seconds 3
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --group dev
+      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py
+      - uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+
   check:
     name: All tests passed
     if: always()
-    needs: [tests]
+    needs: [tests, tests-macos, tests-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: re-actors/alls-green@release/v1
