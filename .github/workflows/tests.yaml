@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 
     services:
       artemis:
@@ -78,7 +78,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
-      - run: uv run pytest --cov=src/zmqtt --cov-report=xml
+      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml
       - uses: codecov/codecov-action@v5
         with:
           files: coverage.xml

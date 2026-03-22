@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import AsyncIterator, Final, Literal, Protocol, overload
 
+from zmqtt._compat import defer_cancellation
 from zmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
 from zmqtt.log import get_logger
 from zmqtt.packets.auth import Auth
@@ -142,8 +143,7 @@ class Subscription:
     async def __aexit__(self, *exc: object) -> None:
         self._client._subscriptions.remove(self)
         await self._cancel_relays()
-        task = asyncio.current_task()
-        being_cancelled = task is not None and task.cancelling() > 0
+        being_cancelled = isinstance(exc[1], asyncio.CancelledError)
         if (
             not being_cancelled
             and self._registered_filters
@@ -243,11 +243,7 @@ class MQTTClient:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        task = asyncio.current_task()
-        cancels = task.cancelling() if task else 0
-        for _ in range(cancels):
-            task.uncancel()  # type: ignore[union-attr]
-        try:
+        async with defer_cancellation():
             if self._run_task is not None:
                 self._run_task.cancel()
                 await asyncio.gather(self._run_task, return_exceptions=True)
@@ -255,9 +251,6 @@ class MQTTClient:
             if self._protocol is not None:
                 await self._protocol.disconnect()
                 self._protocol = None
-        finally:
-            for _ in range(cancels):
-                task.cancel()  # type: ignore[union-attr]
 
     async def publish(
         self,
@@ -356,18 +349,19 @@ class MQTTClient:
 
         while True:
             assert self._protocol is not None
+            protocol_run_task = asyncio.create_task(self._protocol.run())
             try:
                 # Run the protocol as a sub-task so _read_loop is live while we
                 # re-subscribe.  For the first connection subs_to_restore is empty,
                 # so this collapses to the original "await protocol.run()" pattern.
-                async with asyncio.TaskGroup() as tg:
-                    tg.create_task(self._protocol.run())
-                    if subs_to_restore:
-                        await asyncio.sleep(0)  # let _read_loop start
-                        for sub in subs_to_restore:
-                            await sub._reconnect(self._protocol)
-                        subs_to_restore = []
-            except* (MQTTDisconnectedError, MQTTTimeoutError):
+                if subs_to_restore:
+                    await self._protocol.started_event.wait()
+                    for sub in subs_to_restore:
+                        await sub._reconnect(self._protocol)
+                    subs_to_restore = []
+                await protocol_run_task
+
+            except (MQTTDisconnectedError, MQTTTimeoutError):
                 if not self._reconnect.enabled:
                     raise
                 # Close the dead transport to release the file descriptor.

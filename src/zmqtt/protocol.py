@@ -98,9 +98,10 @@ class MQTTProtocol:
         self._keepalive = keepalive
         self._ping_timeout = ping_timeout
         self._version: Final = version
-        self._buf: PacketBuffer = PacketBuffer(version=version)
+        self._buf = PacketBuffer(version=version)
         self._ping_waiters: list[asyncio.Future[None]] = []
-        self._disconnecting: bool = False
+        self._disconnecting = False
+        self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
         """Send CONNECT, read and return CONNACK. Raises on failure."""
@@ -122,11 +123,18 @@ class MQTTProtocol:
 
     async def run(self) -> None:
         """Run read loop and ping loop concurrently until disconnection."""
+        read_task = asyncio.create_task(self._read_loop())
+        ping_task = asyncio.create_task(self._ping_loop())
+        self.started_event.set()
         try:
-            async with asyncio.TaskGroup() as tg:
-                tg.create_task(self._read_loop())
-                tg.create_task(self._ping_loop())
+            await asyncio.gather(read_task, ping_task)
+        except BaseException:
+            read_task.cancel()
+            ping_task.cancel()
+            await asyncio.gather(read_task, ping_task, return_exceptions=True)
+            raise
         finally:
+            self.started_event.clear()
             self._cancel_pending()
 
     async def disconnect(self) -> None:
