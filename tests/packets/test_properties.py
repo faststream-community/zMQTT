@@ -2,8 +2,8 @@
 
 import pytest
 
-from zmqtt.packets._wire import encode_varint
-from zmqtt.packets.properties import (
+from zmqtt._internal.packets._wire import encode_varint
+from zmqtt._internal.packets.properties import (
     AuthProperties,
     ConnAckProperties,
     ConnectProperties,

@@ -67,12 +67,12 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = ["D", "COM812"]
+ignore = ["D", "COM812", "TC001"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D", "PLR2004", "SLF001", "FBT001"]
-"src/zmqtt/protocol.py" = ["SLF001"]
-"src/zmqtt/packets/codec.py" = ["PLR", "C901"]
+"src/zmqtt/_internal/protocol.py" = ["SLF001"]
+"src/zmqtt/_internal/packets/codec.py" = ["PLR", "C901"]
 "src/zmqtt/client.py" = ["PLR0913", "SLF001", "FBT"]
 
 [tool.pytest.ini_options]

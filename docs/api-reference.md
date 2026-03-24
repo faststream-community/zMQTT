@@ -32,7 +32,7 @@
         - __aiter__
         - __anext__
 
-::: zmqtt.types.Message
+::: zmqtt.Message
     options:
       show_source: false
       members:
@@ -51,46 +51,46 @@
 
 ## Enumerations
 
-::: zmqtt.types.QoS
+::: zmqtt.QoS
     options:
       show_source: false
 
-::: zmqtt.types.RetainHandling
+::: zmqtt.RetainHandling
     options:
       show_source: false
 
 ## Properties (MQTT 5.0)
 
-::: zmqtt.packets.properties.PublishProperties
+::: zmqtt.PublishProperties
     options:
       show_source: false
 
-::: zmqtt.packets.properties.ConnectProperties
+::: zmqtt.ConnectProperties
     options:
       show_source: false
 
-::: zmqtt.packets.properties.AuthProperties
+::: zmqtt.AuthProperties
     options:
       show_source: false
 
 ## Exceptions
 
-::: zmqtt.errors.MQTTError
+::: zmqtt.MQTTError
     options:
       show_source: false
 
-::: zmqtt.errors.MQTTConnectError
+::: zmqtt.MQTTConnectError
     options:
       show_source: false
 
-::: zmqtt.errors.MQTTProtocolError
+::: zmqtt.MQTTProtocolError
     options:
       show_source: false
 
-::: zmqtt.errors.MQTTDisconnectedError
+::: zmqtt.MQTTDisconnectedError
     options:
       show_source: false
 
-::: zmqtt.errors.MQTTTimeoutError
+::: zmqtt.MQTTTimeoutError
     options:
       show_source: false

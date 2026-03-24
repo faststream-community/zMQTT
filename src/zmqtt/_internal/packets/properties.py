@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
-from zmqtt.packets._wire import (
+from zmqtt._internal.packets._wire import (
     decode_bytes_field,
     decode_str,
     decode_varint,
@@ -181,6 +181,26 @@ def decode_props_block(
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConnectProperties:
+    """MQTT 5.0 properties sent in the CONNECT packet.
+
+    Attributes:
+        session_expiry_interval: Seconds before the broker discards the session
+            after disconnect. ``0`` means discard immediately; ``0xFFFFFFFF``
+            means never expire.
+        receive_maximum: Maximum number of QoS 1/2 messages the client will
+            process concurrently.
+        maximum_packet_size: Largest packet size (bytes) the client will accept.
+        topic_alias_maximum: Number of topic aliases the client supports. ``0``
+            disables topic aliases.
+        request_response_information: Ask the broker to include response
+            information in CONNACK.
+        request_problem_information: Ask the broker to include reason strings and
+            user properties on errors.
+        authentication_method: Method name for enhanced authentication.
+        authentication_data: Initial data for enhanced authentication.
+        user_properties: Arbitrary key-value pairs forwarded to the broker.
+    """
+
     session_expiry_interval: int | None = None
     receive_maximum: int | None = None
     maximum_packet_size: int | None = None
@@ -226,6 +246,25 @@ class ConnAckProperties:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PublishProperties:
+    """MQTT 5.0 properties attached to a PUBLISH packet.
+
+    Attributes:
+        payload_format_indicator: ``0`` for unspecified binary, ``1`` for UTF-8
+            encoded character data.
+        message_expiry_interval: Seconds the broker retains the message. Omit to
+            keep indefinitely.
+        topic_alias: Topic alias integer used instead of the full topic string on
+            the wire.
+        response_topic: Topic the receiver should use when replying
+            (request/response pattern).
+        correlation_data: Opaque bytes the sender uses to match a response to a
+            request.
+        subscription_identifier: Identifier of the subscription that caused this
+            message to be delivered.
+        content_type: MIME type describing the payload content.
+        user_properties: Arbitrary key-value pairs forwarded with the message.
+    """
+
     payload_format_indicator: int | None = None
     message_expiry_interval: int | None = None
     topic_alias: int | None = None
@@ -277,6 +316,17 @@ class DisconnectProperties:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AuthProperties:
+    """MQTT 5.0 properties sent in an AUTH packet.
+
+    Attributes:
+        authentication_method: Method name for the enhanced authentication
+            exchange.
+        authentication_data: Method-specific data for this step of the
+            authentication exchange.
+        reason_string: Human-readable reason included for diagnostic purposes.
+        user_properties: Arbitrary key-value pairs forwarded with the packet.
+    """
+
     authentication_method: str | None = None
     authentication_data: bytes | None = None
     reason_string: str | None = None

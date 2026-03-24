@@ -1,6 +1,6 @@
 import asyncio
 
-from zmqtt.transport.base import StreamTransport
+from zmqtt._internal.transport.base import StreamTransport
 
 
 async def open_tcp(host: str, port: int) -> StreamTransport:

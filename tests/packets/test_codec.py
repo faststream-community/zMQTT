@@ -2,19 +2,19 @@
 
 import pytest
 
-from zmqtt.packets.codec import decode, decode_varint, encode, encode_varint
-from zmqtt.packets.connect import ConnAck, Connect, Will
-from zmqtt.packets.disconnect import Disconnect
-from zmqtt.packets.ping import PingReq, PingResp
-from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from zmqtt.packets.subscribe import (
+from zmqtt._internal.packets.codec import decode, decode_varint, encode, encode_varint
+from zmqtt._internal.packets.connect import ConnAck, Connect, Will
+from zmqtt._internal.packets.disconnect import Disconnect
+from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt._internal.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from zmqtt.types import QoS
+from zmqtt._internal.types.qos import QoS
 
 
 @pytest.mark.parametrize(

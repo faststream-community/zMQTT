@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from typing import Final, Literal
 
-from zmqtt.packets.codec import AnyPacket, decode
+from zmqtt._internal.packets.codec import AnyPacket, decode
 
 
 class PacketBuffer:

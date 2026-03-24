@@ -1,5 +1,5 @@
 class MQTTError(Exception):
-    pass
+    """Base class for all zmqtt exceptions."""
 
 
 class MQTTConnectError(MQTTError):
@@ -19,4 +19,4 @@ class MQTTDisconnectedError(MQTTError):
 
 
 class MQTTTimeoutError(MQTTError):
-    pass
+    """An MQTT operation did not complete within the allotted time."""

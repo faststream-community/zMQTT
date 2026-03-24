@@ -87,7 +87,7 @@ Pass `version=5` to use MQTT 5.0. Properties are typed dataclasses:
 
 ```python
 from zmqtt import MQTTClient
-from zmqtt.packets.properties import PublishProperties
+from zmqtt._internal.packets.properties import PublishProperties
 
 async with MQTTClient("broker.example.com", version=5) as client:
     props = PublishProperties(content_type="application/json")
