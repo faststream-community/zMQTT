@@ -75,15 +75,9 @@ async def _default_transport_factory(
 
 
 class MQTTClientV311(Protocol):
-    """Type-safe view of MQTTClient for MQTT 3.1.1 connections."""
+    async def __aenter__(self) -> Self: ...
 
-    async def __aenter__(self) -> Self:
-        """Connect to the broker and start the background run loop."""
-        ...
-
-    async def __aexit__(self, *exc: object) -> None:
-        """Disconnect cleanly and stop the run loop."""
-        ...
+    async def __aexit__(self, *exc: object) -> None: ...
 
     async def publish(
         self,
@@ -92,19 +86,7 @@ class MQTTClientV311(Protocol):
         *,
         qos: QoS = QoS.AT_MOST_ONCE,
         retain: bool = False,
-    ) -> None:
-        """Publish a message to *topic*.
-
-        Args:
-            topic: Topic string. Must not contain wildcards.
-            payload: Message body. ``str`` values are UTF-8 encoded automatically.
-            qos: Delivery guarantee level. Defaults to ``AT_MOST_ONCE``.
-            retain: Ask the broker to retain the message for future subscribers.
-
-        Raises:
-            MQTTDisconnectedError: If the client is not currently connected.
-        """
-        ...
+    ) -> None: ...
 
     def subscribe(
         self,
@@ -112,37 +94,13 @@ class MQTTClientV311(Protocol):
         qos: QoS = QoS.AT_MOST_ONCE,
         auto_ack: bool = True,
         receive_buffer_size: int = 1000,
-    ) -> "Subscription":
-        """Create a :class:`Subscription` for one or more topic filters.
+    ) -> "Subscription": ...
 
-        The returned object must be used as an async context manager to activate
-        the subscription and unsubscribe on exit.
+    async def connect(self) -> None: ...
 
-        Args:
-            *filters: One or more MQTT topic filters (wildcards ``+`` and ``#`` allowed).
-            qos: Maximum QoS level requested from the broker.
-            auto_ack: Automatically send PUBACK/PUBREC when a message is received.
-                Set to ``False`` to acknowledge manually via :meth:`Message.ack`.
-            receive_buffer_size: Maximum number of messages buffered in the
-                internal queue before back-pressure is applied.
-        """
-        ...
+    async def disconnect(self) -> None: ...
 
-    async def ping(self, timeout: float = 10.0) -> float:
-        """Send a PINGREQ and return the round-trip time in seconds.
-
-        Args:
-            timeout: Seconds to wait for PINGRESP before raising
-                :exc:`MQTTTimeoutError`.
-
-        Returns:
-            RTT in seconds.
-
-        Raises:
-            MQTTDisconnectedError: If the client is not currently connected.
-            MQTTTimeoutError: If no PINGRESP is received within *timeout* seconds.
-        """
-        ...
+    async def ping(self, timeout: float = 10.0) -> float: ...
 
 
 class MQTTClientV5(Protocol):
@@ -150,6 +108,10 @@ class MQTTClientV5(Protocol):
 
     async def __aenter__(self) -> Self: ...
     async def __aexit__(self, *exc: object) -> None: ...
+
+    async def connect(self) -> None: ...
+
+    async def disconnect(self) -> None: ...
 
     async def publish(
         self,
@@ -258,6 +220,38 @@ class Subscription:
             msg = await source.get()
             await self._queue.put(msg)
 
+    async def start(self) -> None:
+        """Register the subscription filters with the broker.
+        Equivalent to entering the async context manager.
+        Must be paired with a corresponding :meth:`stop` call to send
+        UNSUBSCRIBE and release internal resources.
+
+        Example::
+
+            sub = client.subscribe("sensors/#", qos=QoS.AT_LEAST_ONCE)
+            await sub.start()
+            # ... later
+            await sub.stop()
+
+        Raises:
+            MQTTDisconnectedError: If the client is not currently connected.
+        """
+        await self.__aenter__()
+
+    async def stop(self) -> None:
+        """Unsubscribe from all filters and stop message delivery.
+
+        Equivalent to exiting the async context manager. Sends UNSUBSCRIBE to
+        the broker and cancels internal relay tasks. Safe to call even if the
+        connection has already been lost — the UNSUBSCRIBE is silently skipped
+        in that case.
+
+        Example::
+
+            await sub.stop()
+        """
+        await self.__aexit__(None, None, None)
+
     async def get_message(self) -> Message:
         """Wait for and return the next message from the subscription queue."""
         return await self._queue.get()
@@ -357,6 +351,34 @@ class MQTTClient:
             if self._protocol is not None:
                 await self._protocol.disconnect()
                 self._protocol = None
+
+    async def connect(self) -> None:
+        """Connect to the broker and start the background run loop.
+
+        Equivalent to entering the async context manager.
+        Must be paired with a corresponding :meth:`disconnect` call to send
+        DISCONNECT, close the socket, and stop the background run loop.
+
+        Example::
+
+            client = create_client("broker.example.com")
+            await client.connect()
+            # ... use the client
+            await client.disconnect()
+
+        Raises:
+            MQTTConnectError: If the broker refuses the connection.
+        """
+        await self.__aenter__()
+
+    async def disconnect(self) -> None:
+        """Disconnect cleanly and stop the background run loop.
+
+        Equivalent to exiting the async context manager. Sends DISCONNECT,
+        closes the socket, and cancels the internal run loop task. Safe to
+        call even if the connection has already been lost.
+        """
+        await self.__aexit__(None, None, None)
 
     async def publish(
         self,

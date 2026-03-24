@@ -81,13 +81,20 @@ async with create_client("localhost") as client:
 # Disconnected — DISCONNECT sent, socket closed
 ```
 
-You can also manage the lifecycle manually (less common):
+## Manual lifecycle
+
+When the context manager pattern does not fit your program structure — for example in framework startup/shutdown hooks — use `connect()` and `disconnect()` directly:
 
 ```python
 client = create_client("localhost")
-async with client:
-    await client.publish("test", "hello")
+await client.connect()
+
+await client.publish("test", "hello")
+
+await client.disconnect()
 ```
+
+`disconnect()` is safe to call even if the connection has already been lost.
 
 ## `MQTTClientV311` / `MQTTClientV5` Protocol types
 

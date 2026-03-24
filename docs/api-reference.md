@@ -26,6 +26,8 @@
     options:
       show_source: false
       members:
+        - start
+        - stop
         - get_message
         - __aenter__
         - __aexit__

@@ -218,6 +218,37 @@ class BrokerTestBase(abc.ABC):
 
         assert msg.payload == b"ack-twice"
 
+    async def test_manual_connect_disconnect(self) -> None:
+        client = MQTTClient(
+            self.host,
+            self.port,
+            client_id=f"zmqtt-manual-{uuid.uuid4().hex[:8]}",
+            version=self.version,
+        )
+        await client.connect()
+        try:
+            rtt = await client.ping()
+            assert rtt >= 0
+        finally:
+            await client.disconnect()
+
+    async def test_context_manager_manual_pub_sub(self, topic: str) -> None:
+        async with MQTTClient(
+            self.host,
+            self.port,
+            client_id=f"zmqtt-manual-ps-{uuid.uuid4().hex[:8]}",
+            version=self.version,
+        ) as client:
+            sub = client.subscribe(topic, qos=QoS.AT_LEAST_ONCE)
+            await sub.start()
+            try:
+                await client.publish(topic, b"manual-pubsub", qos=QoS.AT_LEAST_ONCE)
+                msg = await asyncio.wait_for(sub.get_message(), timeout=5.0)
+            finally:
+                await sub.stop()
+
+        assert msg.payload == b"manual-pubsub"
+
     async def test_manual_ack_qos2(self, mqtt_client: MQTTClient, topic: str) -> None:
         async with mqtt_client.subscribe(
             topic,

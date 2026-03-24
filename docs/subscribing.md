@@ -10,6 +10,22 @@ async with client.subscribe("sensors/#") as sub:
         print(msg.topic, msg.payload.decode())
 ```
 
+## Manual subscription lifecycle
+
+When nesting context managers does not fit your program structure — for example when subscriptions are added or removed dynamically at runtime — use `start()` and `stop()` directly:
+
+```python
+sub = client.subscribe("sensors/#", qos=QoS.AT_LEAST_ONCE)
+await sub.start()
+
+async for msg in sub:
+    ...
+
+await sub.stop()
+```
+
+`stop()` sends UNSUBSCRIBE and releases internal resources. It is safe to call even if the connection has already been lost.
+
 ### Buffering and backpressure
 
 Each `Subscription` buffers incoming messages in an internal queue. The size of this buffer is controlled by the `receive_buffer_size` parameter, see [Backpressure](advanced/backpressure.md)
