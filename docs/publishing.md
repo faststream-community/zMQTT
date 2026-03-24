@@ -47,7 +47,7 @@ When connected with `version="5.0"`, you can attach a `PublishProperties` object
 
 ```python
 from zmqtt import create_client
-from zmqtt.packets.properties import PublishProperties
+from zmqtt import PublishProperties
 
 async with create_client("localhost", version="5.0") as client:
     props = PublishProperties(

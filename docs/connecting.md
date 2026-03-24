@@ -99,7 +99,7 @@ async with client:
 
 ```python
 from zmqtt import create_client, MQTTClientV5
-from zmqtt.packets.properties import PublishProperties
+from zmqtt import PublishProperties
 
 async def send_with_expiry(client: MQTTClientV5) -> None:
     props = PublishProperties(message_expiry_interval=60)

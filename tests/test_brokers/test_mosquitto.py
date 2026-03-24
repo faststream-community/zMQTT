@@ -1,5 +1,5 @@
 from tests.test_brokers._base import BrokerTestBase
-from zmqtt.client import Subscription
+from zmqtt import Subscription
 
 
 class BaseTestMosquitto(BrokerTestBase):

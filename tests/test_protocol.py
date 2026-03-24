@@ -11,14 +11,14 @@ from collections import deque
 
 import pytest
 
-import zmqtt.protocol as proto_module
+from zmqtt._internal.packets.codec import encode
+from zmqtt._internal.packets.connect import ConnAck, Connect
+from zmqtt._internal.packets.publish import PubAck, Publish
+from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.state import SessionState, SubscriptionEntry
+from zmqtt._internal.types.message import Message
+from zmqtt._internal.types.qos import QoS
 from zmqtt.errors import MQTTConnectError, MQTTProtocolError, MQTTTimeoutError
-from zmqtt.packets.codec import encode
-from zmqtt.packets.connect import ConnAck, Connect
-from zmqtt.packets.publish import PubAck, Publish
-from zmqtt.protocol import MQTTProtocol, _filter_specificity, _topic_matches
-from zmqtt.state import SessionState, SubscriptionEntry
-from zmqtt.types import Message, QoS
 
 
 class FakeTransport:
@@ -78,50 +78,6 @@ async def _stop_task(task: asyncio.Task[None]) -> None:
         await task
 
 
-@pytest.mark.parametrize(
-    ("filter_", "topic", "expected"),
-    [
-        pytest.param("sensors/#", "sensors/temp", True, id="hash-single-level"),
-        pytest.param("sensors/#", "sensors/temp/room1", True, id="hash-multi-level"),
-        pytest.param("sensors/#", "sensors", True, id="hash-bare"),
-        pytest.param("sensors/+/temp", "sensors/room1/temp", True, id="plus-match"),
-        pytest.param(
-            "sensors/+/temp",
-            "sensors/room1/humidity",
-            False,
-            id="plus-no-match",
-        ),
-        pytest.param("#", "any/topic", True, id="bare-hash-multi"),
-        pytest.param("#", "any", True, id="bare-hash-single"),
-        pytest.param("#", "$SYS/broker", False, id="bare-hash-dollar"),
-        pytest.param("+/foo", "$SYS/foo", False, id="plus-dollar"),
-        pytest.param("$SYS/#", "$SYS/broker/uptime", True, id="sys-hash"),
-        pytest.param("exact/match", "exact/match", True, id="exact-match"),
-        pytest.param("exact/match", "exact/other", False, id="exact-no-match"),
-        pytest.param("a/+/c", "a/b/c", True, id="plus-middle-match"),
-        pytest.param("a/+/c", "a/b/c/d", False, id="plus-middle-no-match"),
-    ],
-)
-def test_topic_matches(filter_: str, topic: str, expected: bool) -> None:
-    assert _topic_matches(filter_, topic) is expected
-
-
-def test_filter_specificity_exact() -> None:
-    assert _filter_specificity("a/b") == (0, 0)
-
-
-def test_filter_specificity_plus() -> None:
-    assert _filter_specificity("a/+/c") == (0, 1, 0)
-
-
-def test_filter_specificity_hash() -> None:
-    assert _filter_specificity("a/#") == (0, 2)
-
-
-def test_filter_specificity_bare_hash() -> None:
-    assert _filter_specificity("#") == (2,)
-
-
 async def test_connect_refused_raises() -> None:
     protocol, transport = make_protocol()
     connect = Connect(client_id="test", clean_session=True, keepalive=60)
@@ -165,36 +121,6 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
         )
 
     assert "unknown/topic" in caplog.text
-
-
-async def test_deliver_tie_first_wins(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Forced specificity tie: first insertion-order entry wins, WARNING logged."""
-
-    protocol, _ = make_protocol()
-    q1: asyncio.Queue[Message] = asyncio.Queue()
-    q2: asyncio.Queue[Message] = asyncio.Queue()
-    protocol._state.subscriptions["a/+"] = SubscriptionEntry(queue=q1, auto_ack=True)
-    protocol._state.subscriptions["a/x"] = SubscriptionEntry(queue=q2, auto_ack=True)
-    monkeypatch.setattr(proto_module, "_filter_specificity", lambda _f: (0, 0))
-
-    with caplog.at_level(logging.WARNING, logger="zmqtt.protocol"):
-        await protocol._deliver(
-            Publish(
-                topic="a/x",
-                payload=b"v",
-                qos=QoS.AT_MOST_ONCE,
-                retain=False,
-                dup=False,
-            ),
-            ack_callback=None,
-        )
-
-    assert q1.qsize() == 1
-    assert q2.qsize() == 0
-    assert "equally-specific" in caplog.text
 
 
 async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -9,32 +10,52 @@ from typing import Final, Literal, Protocol, overload
 
 from typing_extensions import Self
 
-from zmqtt._compat import defer_cancellation
-from zmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
-from zmqtt.log import get_logger
-from zmqtt.packets.auth import Auth
-from zmqtt.packets.connect import Connect
-from zmqtt.packets.properties import (
+from zmqtt._internal._compat import defer_cancellation
+from zmqtt._internal.packets.auth import Auth
+from zmqtt._internal.packets.connect import Connect
+from zmqtt._internal.packets.properties import (
     AuthProperties,
     ConnectProperties,
     PublishProperties,
 )
-from zmqtt.packets.publish import Publish
-from zmqtt.packets.subscribe import SubscriptionRequest
-from zmqtt.protocol import MQTTProtocol
-from zmqtt.state import SessionState
-from zmqtt.transport.base import Transport
-from zmqtt.transport.tcp import open_tcp
-from zmqtt.transport.tls import open_tls
-from zmqtt.types import Message, QoS
+from zmqtt._internal.packets.publish import Publish
+from zmqtt._internal.packets.subscribe import SubscriptionRequest
+from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.state import SessionState
+from zmqtt._internal.transport.base import Transport
+from zmqtt._internal.transport.tcp import open_tcp
+from zmqtt._internal.transport.tls import open_tls
+from zmqtt._internal.types.message import Message
+from zmqtt._internal.types.qos import QoS
+from zmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
+
+__all__ = (
+    "MQTTClient",
+    "MQTTClientV5",
+    "MQTTClientV311",
+    "ReconnectConfig",
+    "Subscription",
+    "Transport",
+    "create_client",
+)
 
 TransportFactory = Callable[[str, int, ssl.SSLContext | bool], Awaitable[Transport]]
 
-log = get_logger(__name__)
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReconnectConfig:
+    """Configuration for automatic reconnection on connection loss.
+
+    Attributes:
+        enabled: Whether to reconnect automatically. Set to ``False`` to let
+            exceptions propagate immediately on disconnection.
+        initial_delay: Seconds to wait before the first reconnection attempt.
+        max_delay: Upper bound (seconds) for the exponential back-off delay.
+        backoff_factor: Multiplier applied to the delay after each failed attempt.
+    """
+
     enabled: bool = True
     initial_delay: float = 1.0
     max_delay: float = 60.0
@@ -56,8 +77,13 @@ async def _default_transport_factory(
 class MQTTClientV311(Protocol):
     """Type-safe view of MQTTClient for MQTT 3.1.1 connections."""
 
-    async def __aenter__(self) -> Self: ...
-    async def __aexit__(self, *exc: object) -> None: ...
+    async def __aenter__(self) -> Self:
+        """Connect to the broker and start the background run loop."""
+        ...
+
+    async def __aexit__(self, *exc: object) -> None:
+        """Disconnect cleanly and stop the run loop."""
+        ...
 
     async def publish(
         self,
@@ -66,7 +92,19 @@ class MQTTClientV311(Protocol):
         *,
         qos: QoS = QoS.AT_MOST_ONCE,
         retain: bool = False,
-    ) -> None: ...
+    ) -> None:
+        """Publish a message to *topic*.
+
+        Args:
+            topic: Topic string. Must not contain wildcards.
+            payload: Message body. ``str`` values are UTF-8 encoded automatically.
+            qos: Delivery guarantee level. Defaults to ``AT_MOST_ONCE``.
+            retain: Ask the broker to retain the message for future subscribers.
+
+        Raises:
+            MQTTDisconnectedError: If the client is not currently connected.
+        """
+        ...
 
     def subscribe(
         self,
@@ -74,9 +112,37 @@ class MQTTClientV311(Protocol):
         qos: QoS = QoS.AT_MOST_ONCE,
         auto_ack: bool = True,
         receive_buffer_size: int = 1000,
-    ) -> "Subscription": ...
+    ) -> "Subscription":
+        """Create a :class:`Subscription` for one or more topic filters.
 
-    async def ping(self, timeout: float = 10.0) -> float: ...
+        The returned object must be used as an async context manager to activate
+        the subscription and unsubscribe on exit.
+
+        Args:
+            *filters: One or more MQTT topic filters (wildcards ``+`` and ``#`` allowed).
+            qos: Maximum QoS level requested from the broker.
+            auto_ack: Automatically send PUBACK/PUBREC when a message is received.
+                Set to ``False`` to acknowledge manually via :meth:`Message.ack`.
+            receive_buffer_size: Maximum number of messages buffered in the
+                internal queue before back-pressure is applied.
+        """
+        ...
+
+    async def ping(self, timeout: float = 10.0) -> float:
+        """Send a PINGREQ and return the round-trip time in seconds.
+
+        Args:
+            timeout: Seconds to wait for PINGRESP before raising
+                :exc:`MQTTTimeoutError`.
+
+        Returns:
+            RTT in seconds.
+
+        Raises:
+            MQTTDisconnectedError: If the client is not currently connected.
+            MQTTTimeoutError: If no PINGRESP is received within *timeout* seconds.
+        """
+        ...
 
 
 class MQTTClientV5(Protocol):
@@ -139,6 +205,11 @@ class Subscription:
         self._registered_filters: list[str] = []
 
     async def __aenter__(self) -> Self:
+        """Register the subscription filters with the broker.
+
+        Raises:
+            MQTTDisconnectedError: If the client is not currently connected.
+        """
         if self._client._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
@@ -147,6 +218,7 @@ class Subscription:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        """Unsubscribe from all filters and stop message delivery."""
         self._client._subscriptions.remove(self)
         await self._cancel_relays()
         being_cancelled = isinstance(exc[1], asyncio.CancelledError)
@@ -187,12 +259,15 @@ class Subscription:
             await self._queue.put(msg)
 
     async def get_message(self) -> Message:
+        """Wait for and return the next message from the subscription queue."""
         return await self._queue.get()
 
     def __aiter__(self) -> AsyncIterator[Message]:
+        """Return self as the async iterator."""
         return self
 
     async def __anext__(self) -> Message:
+        """Return the next message, suspending until one is available."""
         return await self.get_message()
 
 
@@ -219,6 +294,37 @@ class MQTTClient:
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
     ) -> None:
+        """Create an MQTT client.
+
+        The client must be used as an async context manager to establish the
+        connection::
+
+            async with MQTTClient("broker.example.com") as client:
+                await client.publish("sensors/temp", "22.5")
+
+        Prefer :func:`create_client` for version-typed access.
+
+        Args:
+            host: Broker hostname or IP address.
+            port: TCP port. Defaults to ``1883`` (``8883`` is conventional for TLS).
+            client_id: Client identifier sent in CONNECT. An empty string lets the
+                broker assign one.
+            keepalive: Keepalive interval in seconds. ``0`` disables keepalive.
+            clean_session: Start with a clean session (MQTT 3.1.1) or discard any
+                existing session state on connect.
+            username: Optional username for broker authentication.
+            password: Optional plain-text password for broker authentication.
+            tls: TLS configuration. Pass ``True`` for default TLS, an
+                :class:`ssl.SSLContext` for custom settings, or ``False`` (default)
+                for a plain TCP connection.
+            reconnect: Reconnection policy. Defaults to
+                :class:`ReconnectConfig` with exponential back-off enabled.
+            transport_factory: Override the low-level transport. Useful for testing.
+            version: MQTT protocol version to use. Either ``"3.1.1"`` (default) or
+                ``"5.0"``.
+            session_expiry_interval: MQTT 5.0 session expiry interval in seconds.
+                ``0`` means the session expires on disconnect.
+        """
         self._host = host
         self._port = port
         self._client_id = client_id
@@ -236,11 +342,13 @@ class MQTTClient:
         self._run_task: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> Self:
+        """Connect to the broker and start the background run loop."""
         await self._connect()
         self._run_task = asyncio.create_task(self._run_loop())
         return self
 
     async def __aexit__(self, *exc: object) -> None:
+        """Disconnect cleanly and cancel the run loop."""
         async with defer_cancellation():
             if self._run_task is not None:
                 self._run_task.cancel()
@@ -259,6 +367,19 @@ class MQTTClient:
         retain: bool = False,
         properties: PublishProperties | None = None,
     ) -> None:
+        """Publish a message to *topic*.
+
+        Args:
+            topic: Topic string. Must not contain wildcards.
+            payload: Message body. ``str`` values are UTF-8 encoded automatically.
+            qos: Delivery guarantee level. Defaults to ``AT_MOST_ONCE``.
+            retain: Ask the broker to retain the message for future subscribers.
+            properties: MQTT 5.0 publish properties. Raises if used with MQTT 3.1.1.
+
+        Raises:
+            MQTTDisconnectedError: If the client is not currently connected.
+            RuntimeError: If *properties* is supplied on an MQTT 3.1.1 connection.
+        """
         if self._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
@@ -279,7 +400,19 @@ class MQTTClient:
         )
 
     async def ping(self, timeout: float = 10.0) -> float:
-        """Send PINGREQ and return RTT in seconds when PINGRESP is received."""
+        """Send a PINGREQ and return the round-trip time in seconds.
+
+        Args:
+            timeout: Seconds to wait for PINGRESP before raising
+                :exc:`MQTTTimeoutError`.
+
+        Returns:
+            RTT in seconds.
+
+        Raises:
+            MQTTDisconnectedError: If the client is not currently connected.
+            MQTTTimeoutError: If no PINGRESP is received within *timeout* seconds.
+        """
         if self._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
@@ -294,6 +427,32 @@ class MQTTClient:
         no_local: bool = False,
         retain_as_published: bool = False,
     ) -> Subscription:
+        """Create a :class:`Subscription` for one or more topic filters.
+
+        The returned object must be used as an async context manager to activate
+        the subscription and unsubscribe on exit::
+
+            async with client.subscribe("sensors/#", qos=QoS.AT_LEAST_ONCE) as sub:
+                async for msg in sub:
+                    print(msg.topic, msg.payload)
+
+        Args:
+            *filters: One or more MQTT topic filters. Wildcards ``+`` (single level)
+                and ``#`` (multi-level) are supported.
+            qos: Maximum QoS level requested from the broker.
+            auto_ack: Automatically send PUBACK/PUBREC upon receipt. Set to
+                ``False`` to acknowledge manually via :meth:`Message.ack`.
+            receive_buffer_size: Maximum messages buffered in the internal queue.
+                Older messages are dropped when the queue is full.
+            no_local: Do not receive messages published by this client (MQTT 5.0
+                only).
+            retain_as_published: Preserve the retain flag on forwarded messages
+                (MQTT 5.0 only).
+
+        Raises:
+            RuntimeError: If *no_local* or *retain_as_published* are used on an
+                MQTT 3.1.1 connection.
+        """
         if (no_local or retain_as_published) and self._version != "5.0":
             msg = "no_local and retain_as_published require MQTT 5.0"
             raise RuntimeError(msg)
@@ -308,7 +467,16 @@ class MQTTClient:
         )
 
     async def auth(self, method: str, data: bytes | None = None) -> None:
-        """Send AUTH packet for enhanced authentication (MQTT 5.0 only)."""
+        """Send an AUTH packet for enhanced authentication (MQTT 5.0 only).
+
+        Args:
+            method: Authentication method name negotiated with the broker.
+            data: Optional authentication data to include in the packet.
+
+        Raises:
+            RuntimeError: If the client is not using MQTT 5.0.
+            MQTTDisconnectedError: If the client is not currently connected.
+        """
         if self._version != "5.0":
             msg = "AUTH requires MQTT 5.0"
             raise RuntimeError(msg)

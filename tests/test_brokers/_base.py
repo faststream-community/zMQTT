@@ -12,8 +12,7 @@ from typing import ClassVar, Literal
 
 import pytest
 
-from zmqtt.client import MQTTClient, ReconnectConfig, Subscription
-from zmqtt.types import QoS
+from zmqtt import MQTTClient, QoS, ReconnectConfig, Subscription
 
 
 @pytest.mark.broker
@@ -40,12 +39,8 @@ class BrokerTestBase(abc.ABC):
         ) as client:
             yield client
 
-    # ------------------------------------------------------------------ ping
-
     async def test_ping(self, mqtt_client: MQTTClient) -> None:
         await mqtt_client.ping()
-
-    # ------------------------------------------------------------------ publish
 
     async def test_publish_qos0(self, mqtt_client: MQTTClient, topic: str) -> None:
         await mqtt_client.publish(topic, b"hello")

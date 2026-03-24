@@ -3,13 +3,10 @@
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
 
-from zmqtt.packets.publish import PubAck, PubComp, Publish
-from zmqtt.types import Message
-
-if TYPE_CHECKING:
-    from zmqtt.packets.subscribe import SubAck, UnsubAck
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
+from zmqtt._internal.packets.subscribe import SubAck, UnsubAck
+from zmqtt._internal.types.message import Message
 
 
 class PacketIdPool:

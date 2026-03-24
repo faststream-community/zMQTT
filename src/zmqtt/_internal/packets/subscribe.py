@@ -1,14 +1,15 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
-from zmqtt.packets.properties import (
+from zmqtt._internal.packets.properties import (
     SubAckProperties,
     SubscribeProperties,
     UnsubAckProperties,
     UnsubscribeProperties,
 )
-from zmqtt.packets.types import Packet, PacketType
-from zmqtt.types import QoS, RetainHandling
+from zmqtt._internal.packets.types import Packet, PacketType
+from zmqtt._internal.types.qos import QoS
+from zmqtt._internal.types.retain_handling import RetainHandling
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

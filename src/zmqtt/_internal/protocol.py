@@ -3,31 +3,25 @@
 import asyncio
 import contextlib
 import dataclasses
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Final, Literal, cast
 
-from zmqtt.errors import (
-    MQTTConnectError,
-    MQTTDisconnectedError,
-    MQTTProtocolError,
-    MQTTTimeoutError,
-)
-from zmqtt.log import get_logger
-from zmqtt.packets.auth import Auth
-from zmqtt.packets.codec import AnyPacket, encode
-from zmqtt.packets.connect import ConnAck, Connect
-from zmqtt.packets.disconnect import Disconnect
-from zmqtt.packets.ping import PingReq, PingResp
-from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from zmqtt.packets.reader import PacketBuffer
-from zmqtt.packets.subscribe import (
+from zmqtt._internal.packets.auth import Auth
+from zmqtt._internal.packets.codec import AnyPacket, encode
+from zmqtt._internal.packets.connect import ConnAck, Connect
+from zmqtt._internal.packets.disconnect import Disconnect
+from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt._internal.packets.reader import PacketBuffer
+from zmqtt._internal.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from zmqtt.state import (
+from zmqtt._internal.state import (
     InboundQoS2Flight,
     InboundQoS2State,
     OutboundQoS2Flight,
@@ -36,10 +30,17 @@ from zmqtt.state import (
     SessionState,
     SubscriptionEntry,
 )
-from zmqtt.transport.base import Transport
-from zmqtt.types import Message, QoS
+from zmqtt._internal.transport.base import Transport
+from zmqtt._internal.types.message import Message
+from zmqtt._internal.types.qos import QoS
+from zmqtt.errors import (
+    MQTTConnectError,
+    MQTTDisconnectedError,
+    MQTTProtocolError,
+    MQTTTimeoutError,
+)
 
-log = get_logger(__name__)
+log = logging.getLogger(__name__)
 
 
 def _topic_matches(filter_: str, topic: str) -> bool:

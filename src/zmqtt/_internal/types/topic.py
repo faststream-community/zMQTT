@@ -1,26 +1,4 @@
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from enum import IntEnum
-
 from typing_extensions import Self
-
-from zmqtt.packets.properties import PublishProperties
-
-
-class QoS(IntEnum):
-    AT_MOST_ONCE = 0
-    AT_LEAST_ONCE = 1
-    EXACTLY_ONCE = 2
-
-
-class RetainHandling(IntEnum):
-    """
-    MQTT 5.0 subscription option controlling which retained messages are delivered.
-    """
-
-    SEND_ON_SUBSCRIBE = 0
-    SEND_IF_NOT_EXISTS = 1
-    DO_NOT_SEND = 2
 
 
 def _validate_topic_name(topic: str) -> None:
@@ -84,31 +62,3 @@ class TopicFilter(str):
     def __new__(cls, value: str) -> Self:
         _validate_topic_filter(value)
         return super().__new__(cls, value)
-
-
-@dataclass(slots=True, kw_only=True)
-class Message:
-    """Incoming MQTT message as delivered to application code."""
-
-    topic: str
-    payload: bytes
-    qos: QoS
-    retain: bool
-    properties: PublishProperties | None = None  # v5 only
-    _ack_callback: Callable[[], Awaitable[None]] | None = field(
-        default=None,
-        repr=False,
-        init=False,
-    )
-    _resolved: bool = field(default=False, repr=False, init=False)
-
-    async def ack(self) -> None:
-        """
-        Send the protocol-level ack for this message.
-        Idempotent; no-op when auto_ack=True.
-        """
-        if self._resolved:
-            return
-        object.__setattr__(self, "_resolved", True)
-        if self._ack_callback is not None:
-            await self._ack_callback()

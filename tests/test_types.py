@@ -1,8 +1,6 @@
-"""Tests for zmqtt.types and zmqtt.errors."""
-
 import pytest
 
-from zmqtt.types import (
+from zmqtt._internal.types.topic import (
     Topic,
     TopicFilter,
 )

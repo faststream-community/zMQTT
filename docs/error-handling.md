@@ -10,10 +10,10 @@ MQTTError
   └── MQTTTimeoutError      # ping or operation timed out
 ```
 
-All exceptions are importable from `zmqtt.errors`:
+All exceptions are importable from `zmqtt`:
 
 ```python
-from zmqtt.errors import (
+from zmqtt import (
     MQTTError,
     MQTTConnectError,
     MQTTProtocolError,
@@ -29,7 +29,7 @@ from zmqtt.errors import (
 Raised during `__aenter__` when the broker refuses the connection. The `return_code` attribute holds the CONNACK return code:
 
 ```python
-from zmqtt.errors import MQTTConnectError
+from zmqtt import MQTTConnectError
 
 try:
     async with create_client("localhost") as client:
@@ -79,7 +79,7 @@ When reconnection is disabled, the exception propagates out of the client contex
 
 ```python
 from zmqtt import create_client, ReconnectConfig
-from zmqtt.errors import MQTTDisconnectedError
+from zmqtt import MQTTDisconnectedError
 
 async with create_client(
     "localhost",

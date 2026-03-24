@@ -4,8 +4,8 @@ import asyncio
 
 import pytest
 
-from zmqtt.packets.publish import PubAck, PubComp, Publish
-from zmqtt.state import (
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
+from zmqtt._internal.state import (
     InboundQoS2Flight,
     InboundQoS2State,
     OutboundQoS2Flight,
@@ -15,7 +15,7 @@ from zmqtt.state import (
     SessionState,
     SubscriptionEntry,
 )
-from zmqtt.types import QoS
+from zmqtt._internal.types.qos import QoS
 
 
 def test_acquire_returns_sequential_ids() -> None:

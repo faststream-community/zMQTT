@@ -59,7 +59,7 @@ async with create_client(
 With reconnection disabled, `MQTTDisconnectedError` propagates out of the client context manager as an `ExceptionGroup`. Catch it with `except*`:
 
 ```python
-from zmqtt.errors import MQTTDisconnectedError
+from zmqtt import MQTTDisconnectedError
 
 try:
     async with create_client("localhost", reconnect=ReconnectConfig(enabled=False)) as client:

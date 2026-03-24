@@ -4,11 +4,11 @@ from typing import Literal
 
 import pytest
 
-from zmqtt.packets.auth import Auth
-from zmqtt.packets.codec import AnyPacket, decode, encode
-from zmqtt.packets.connect import ConnAck, Connect, Will
-from zmqtt.packets.disconnect import Disconnect
-from zmqtt.packets.properties import (
+from zmqtt._internal.packets.auth import Auth
+from zmqtt._internal.packets.codec import AnyPacket, decode, encode
+from zmqtt._internal.packets.connect import ConnAck, Connect, Will
+from zmqtt._internal.packets.disconnect import Disconnect
+from zmqtt._internal.packets.properties import (
     AuthProperties,
     ConnAckProperties,
     ConnectProperties,
@@ -21,15 +21,16 @@ from zmqtt.packets.properties import (
     UnsubscribeProperties,
     WillProperties,
 )
-from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from zmqtt.packets.subscribe import (
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt._internal.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from zmqtt.types import QoS, RetainHandling
+from zmqtt._internal.types.qos import QoS
+from zmqtt._internal.types.retain_handling import RetainHandling
 
 
 def roundtrip(packet: AnyPacket, version: Literal["3.1.1", "5.0"] = "5.0") -> AnyPacket:

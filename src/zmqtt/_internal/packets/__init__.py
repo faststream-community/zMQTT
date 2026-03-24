@@ -1,10 +1,10 @@
 """MQTT packet dataclasses."""
 
-from zmqtt.packets.auth import Auth
-from zmqtt.packets.connect import ConnAck, Connect, Will
-from zmqtt.packets.disconnect import Disconnect
-from zmqtt.packets.ping import PingReq, PingResp
-from zmqtt.packets.properties import (
+from zmqtt._internal.packets.auth import Auth
+from zmqtt._internal.packets.connect import ConnAck, Connect, Will
+from zmqtt._internal.packets.disconnect import Disconnect
+from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.properties import (
     AuthProperties,
     ConnAckProperties,
     ConnectProperties,
@@ -17,15 +17,15 @@ from zmqtt.packets.properties import (
     UnsubscribeProperties,
     WillProperties,
 )
-from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from zmqtt.packets.subscribe import (
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt._internal.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from zmqtt.packets.types import FixedHeader, Packet, PacketType
+from zmqtt._internal.packets.types import FixedHeader, Packet, PacketType
 
 __all__ = [
     "Auth",

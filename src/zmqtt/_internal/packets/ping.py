@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import ClassVar
 
-from zmqtt.packets.types import Packet, PacketType
+from zmqtt._internal.packets.types import Packet, PacketType
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

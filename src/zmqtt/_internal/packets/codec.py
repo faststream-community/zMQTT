@@ -3,7 +3,7 @@
 import struct
 from typing import Literal
 
-from zmqtt.packets._wire import (
+from zmqtt._internal.packets._wire import (
     decode_bytes_field,
     decode_str,
     decode_varint,
@@ -11,11 +11,11 @@ from zmqtt.packets._wire import (
     encode_str,
     encode_varint,
 )
-from zmqtt.packets.auth import Auth
-from zmqtt.packets.connect import ConnAck, Connect, Will
-from zmqtt.packets.disconnect import Disconnect
-from zmqtt.packets.ping import PingReq, PingResp
-from zmqtt.packets.properties import (
+from zmqtt._internal.packets.auth import Auth
+from zmqtt._internal.packets.connect import ConnAck, Connect, Will
+from zmqtt._internal.packets.disconnect import Disconnect
+from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.properties import (
     decode_auth_properties,
     decode_connack_properties,
     decode_connect_properties,
@@ -39,18 +39,19 @@ from zmqtt.packets.properties import (
     encode_unsubscribe_properties,
     encode_will_properties,
 )
-from zmqtt.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
-from zmqtt.packets.subscribe import (
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt._internal.packets.subscribe import (
     SubAck,
     Subscribe,
     SubscriptionRequest,
     UnsubAck,
     Unsubscribe,
 )
-from zmqtt.packets.types import PacketType
-from zmqtt.types import QoS, RetainHandling
+from zmqtt._internal.packets.types import PacketType
+from zmqtt._internal.types.qos import QoS
+from zmqtt._internal.types.retain_handling import RetainHandling
 
-# Re-export wire helpers so existing callers of ``from zmqtt.packets.codec import …`` keep working.
+# Re-export wire helpers so existing callers of ``from zmqtt._internal.packets.codec import …`` keep working.
 __all__ = [
     "decode",
     "decode_varint",
