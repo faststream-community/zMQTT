@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.0.1-alpha.5 (2026-03-24)
+
+### Chores
+
+- Refactor, remove useless tests, improve docs
+  ([#14](https://github.com/faststream-community/zMQTT/pull/14),
+  [`0a1862e`](https://github.com/faststream-community/zMQTT/commit/0a1862e7f3c116989494a2fedc52f2cd01ea58b6))
+
+### Features
+
+- Manual connection and subscription ([#15](https://github.com/faststream-community/zMQTT/pull/15),
+  [`87c2bb8`](https://github.com/faststream-community/zMQTT/commit/87c2bb89f9c7f7a44d71ca1f744d589f1aed9740))
+
+
 ## v0.0.1-alpha.4 (2026-03-23)
 
 ### Chores
@@ -61,11 +75,4 @@ chore: Add release pipeline
   ([`77ae34f`](https://github.com/faststream-community/zMQTT/commit/77ae34f6da88f108d8547b61892a1af064cd09bb))
 
 - Tests infra
-  ([`8f3b14c`](https://github.com/faststre                                                                        
-50 +                                                                                                                                                       
-51 +    Attributes:                                                                                                                                        
-52 +        enabled: Whether to reconnect automatically. Set to ``False`` to let                                                                           
-53 +            exceptions propagate immediately on disconnection.                                                                                         
-54 +        initial_delay: Seconds to wait before the first reconnection attempt.                                                                          
-55 +        max_delay: Upper bound (seconds) for the exponential back-off delay.                                                                           
-56 +        backoff_factor: Multiplier applied to the delay after each failed attempt. am-community/zMQTT/commit/8f3b14cdc9eb2bd4d8c4f74404bc26232d6dc525))
+  ([`8f3b14c`](https://github.com/faststream-community/zMQTT/commit/8f3b14cdc9eb2bd4d8c4f74404bc26232d6dc525))
