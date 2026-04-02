@@ -52,13 +52,12 @@ def _shared_filter_to_actual(filter_: str) -> str:
     return filter_
 
 
-def _topic_matches(filter_: str, topic: str) -> bool:
-    """Return True if topic matches the MQTT topic filter."""
-    filter_ = _shared_filter_to_actual(filter_)
+def _topic_matches(actual_filter: str, topic: str) -> bool:
+    """Return True if topic matches the MQTT topic filter (shared prefix already stripped)."""
     # $-prefixed topics are not matched by wildcards unless filter also starts with $
-    if topic.startswith("$") and not filter_.startswith("$"):
+    if topic.startswith("$") and not actual_filter.startswith("$"):
         return False
-    return _match_parts(filter_.split("/"), topic.split("/"))
+    return _match_parts(actual_filter.split("/"), topic.split("/"))
 
 
 def _match_parts(fparts: list[str], tparts: list[str]) -> bool:
@@ -81,9 +80,9 @@ def _segment_rank(seg: str) -> int:
     return 0
 
 
-def _filter_specificity(filter_: str) -> tuple[int, ...]:
-    """Return a sort key for a filter; lexicographically smaller == more specific."""
-    return tuple(_segment_rank(s) for s in _shared_filter_to_actual(filter_).split("/"))
+def _filter_specificity(actual_filter: str) -> tuple[int, ...]:
+    """Return a sort key for a filter (shared prefix already stripped); lexicographically smaller == more specific."""
+    return tuple(_segment_rank(s) for s in actual_filter.split("/"))
 
 
 class MQTTProtocol:
@@ -246,6 +245,7 @@ class MQTTProtocol:
                 new_entries[f] = SubscriptionEntry(
                     queue=asyncio.Queue(),
                     auto_ack=auto_ack,
+                    actual_filter=_shared_filter_to_actual(f),
                 )
         self._state.subscriptions.update(new_entries)
         future: asyncio.Future[SubAck] = loop.create_future()
@@ -367,11 +367,11 @@ class MQTTProtocol:
         """
         Return True if the winning subscriptions all have auto_ack=True or none match.
         """
-        matching = [(f, e) for f, e in self._state.subscriptions.items() if _topic_matches(f, topic)]
+        matching = [(f, e) for f, e in self._state.subscriptions.items() if _topic_matches(e.actual_filter, topic)]
         if not matching:
             return True
-        best_key = min(_filter_specificity(f) for f, _ in matching)
-        winners = [e for f, e in matching if _filter_specificity(f) == best_key]
+        best_key = min(_filter_specificity(e.actual_filter) for _, e in matching)
+        winners = [e for _, e in matching if _filter_specificity(e.actual_filter) == best_key]
         return all(e.auto_ack for e in winners)
 
     async def _handle_publish(self, packet: Publish) -> None:
@@ -514,12 +514,12 @@ class MQTTProtocol:
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
         snapshot = list(self._state.subscriptions.items())
-        matching = [(f, e) for f, e in snapshot if _topic_matches(f, publish.topic)]
+        matching = [(f, e) for f, e in snapshot if _topic_matches(e.actual_filter, publish.topic)]
         if not matching:
             log.warning("No subscriber for topic %r", publish.topic)
             return
-        best_key = min(_filter_specificity(f) for f, _ in matching)
-        winners = [(f, e) for f, e in matching if _filter_specificity(f) == best_key]
+        best_key = min(_filter_specificity(e.actual_filter) for _, e in matching)
+        winners = [(f, e) for f, e in matching if _filter_specificity(e.actual_filter) == best_key]
         if len(winners) > 1:
             log.warning(
                 "Multiple equally-specific subscribers for %r: %s, delivering to first",

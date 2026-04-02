@@ -135,6 +135,7 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
     protocol._state.subscriptions["t/#"] = SubscriptionEntry(
         queue=queue,
         auto_ack=False,
+        actual_filter="t/#",
     )
     transport.sent.clear()
 

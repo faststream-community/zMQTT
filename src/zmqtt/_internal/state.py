@@ -67,6 +67,7 @@ class InboundQoS2Flight:
 class SubscriptionEntry:
     queue: asyncio.Queue[Message]
     auto_ack: bool = True
+    actual_filter: str = ""  # filter with $share/<group>/ stripped; set on creation
 
 
 class SessionState:
