@@ -2,7 +2,7 @@
 
 ## `receive_buffer_size`
 
-By default, the internal message queue for each `Subscription` is unbounded. Set `receive_buffer_size` to cap it:
+By default, the internal message queue for each `Subscription` is bounded to `1000`. Set `receive_buffer_size` to change it:
 
 ```python
 async with client.subscribe("telemetry/#", receive_buffer_size=100) as sub:
@@ -14,11 +14,11 @@ async with client.subscribe("telemetry/#", receive_buffer_size=100) as sub:
 
 ## How flow control works
 
-The library's read loop (`_read_loop`) reads packets from the TCP stream and dispatches them. When a `Subscription` queue is full:
+The library's read loop reads packets from the TCP stream and dispatches them. When a `Subscription` queue is full:
 
 1. The relay task that moves messages from the internal protocol queue to your subscription queue blocks on `queue.put()`.
 2. The protocol's internal queue for that filter fills up.
-3. `_read_loop` stops reading new data from the socket.
+3. Read loop stops reading new data from the socket.
 4. The TCP receive buffer fills.
 5. The TCP stack signals backpressure to the broker via window size reduction.
 
@@ -32,7 +32,7 @@ Use `receive_buffer_size` when:
 - You need guaranteed processing of every message without unbounded queue growth.
 - You are implementing a consumer that must apply backpressure to upstream producers.
 
-Leave it at the default (`0` = unbounded) when:
+Set it to `0` (unbounded) when:
 
 - Message arrival rate is low or bounded.
 - You buffer messages yourself (e.g. writing to a database in batches).

@@ -30,10 +30,6 @@ logging.getLogger("zmqtt.client").setLevel(logging.WARNING)
 logging.getLogger("zmqtt.protocol").setLevel(logging.DEBUG)
 ```
 
-## No-handlers policy
-
-zmqtt never installs handlers and never calls `logging.basicConfig()`. Your application controls all formatting, destinations, and log levels. The library only emits records — what happens to them is entirely up to you.
-
 ## What DEBUG output looks like
 
 At `DEBUG` level, the protocol layer logs every packet sent and received:
