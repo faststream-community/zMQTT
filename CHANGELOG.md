@@ -69,8 +69,6 @@
 - Add release pipeline
   ([`071b85d`](https://github.com/faststream-community/zMQTT/commit/071b85d167c6b26a8dd0c85bc08f4ea65f86958c))
 
-chore: Add release pipeline
-
 - Add release pipeline
   ([`77ae34f`](https://github.com/faststream-community/zMQTT/commit/77ae34f6da88f108d8547b61892a1af064cd09bb))
 

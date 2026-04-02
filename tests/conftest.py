@@ -1,9 +1,6 @@
-import logging
 import uuid
 
 import pytest
-
-logging.basicConfig(level=logging.DEBUG)
 
 
 @pytest.fixture

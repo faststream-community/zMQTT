@@ -34,6 +34,7 @@ nav:
     - Ping: advanced/ping.md
     - MQTT 5.0: advanced/mqtt5.md
     - Backpressure: advanced/backpressure.md
+    - Scaling: advanced/scaling.md
   - Error Handling: error-handling.md
   - Logging: logging.md
   - API Reference: api-reference.md

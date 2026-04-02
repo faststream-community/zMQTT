@@ -152,4 +152,4 @@ Prefer multiple filters in a single `subscribe()` call rather than multiple over
 
 ---
 
-**See also:** [Manual Ack](advanced/manual-ack.md) · [Backpressure](advanced/backpressure.md) · [MQTT 5.0](advanced/mqtt5.md)
+**See also:** [Manual Ack](advanced/manual-ack.md) · [Backpressure](advanced/backpressure.md) · [MQTT 5.0](advanced/mqtt5.md) · [Scaling](advanced/scaling.md)

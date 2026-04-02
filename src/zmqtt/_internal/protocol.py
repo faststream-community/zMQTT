@@ -43,8 +43,18 @@ from zmqtt.errors import (
 log = logging.getLogger(__name__)
 
 
+def _shared_filter_to_actual(filter_: str) -> str:
+    """Strip the $share/<group>/ prefix from a shared subscription filter."""
+    if filter_.startswith("$share/"):
+        parts = filter_.split("/", 2)
+        if len(parts) == 3:
+            return parts[2]
+    return filter_
+
+
 def _topic_matches(filter_: str, topic: str) -> bool:
     """Return True if topic matches the MQTT topic filter."""
+    filter_ = _shared_filter_to_actual(filter_)
     # $-prefixed topics are not matched by wildcards unless filter also starts with $
     if topic.startswith("$") and not filter_.startswith("$"):
         return False
@@ -73,7 +83,7 @@ def _segment_rank(seg: str) -> int:
 
 def _filter_specificity(filter_: str) -> tuple[int, ...]:
     """Return a sort key for a filter; lexicographically smaller == more specific."""
-    return tuple(_segment_rank(s) for s in filter_.split("/"))
+    return tuple(_segment_rank(s) for s in _shared_filter_to_actual(filter_).split("/"))
 
 
 class MQTTProtocol:

@@ -107,6 +107,46 @@ class BrokerTestBase(abc.ABC):
 
         assert received == payloads
 
+    async def test_shared_subscription(self, topic: str) -> None:
+        group = f"zmqtt-sh-{uuid.uuid4().hex[:8]}"
+        # Strip leading slash to avoid $share/group//topic (double slash) which some brokers reject
+        bare_topic = topic.lstrip("/")
+        shared_filter = f"$share/{group}/{bare_topic}"
+
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as c1,
+            MQTTClient(self.host, self.port, version=self.version) as c2,
+            MQTTClient(
+                self.host, self.port, client_id=f"zmqtt-pub-{uuid.uuid4().hex[:8]}", version=self.version
+            ) as pub,
+            c1.subscribe(shared_filter, qos=QoS.AT_LEAST_ONCE) as sub1,
+            c2.subscribe(shared_filter, qos=QoS.AT_LEAST_ONCE) as sub2,
+        ):
+            for i in range(10):
+                await pub.publish(bare_topic, f"msg-{i}".encode(), qos=QoS.AT_LEAST_ONCE)
+
+            remain_msgs = 10
+            e = asyncio.Event()
+
+            async def drain(sub: Subscription) -> None:
+                nonlocal remain_msgs
+                async for _ in sub:
+                    remain_msgs -= 1
+                    if remain_msgs < 1:
+                        e.set()
+
+            task1 = asyncio.create_task(drain(sub1))
+            task2 = asyncio.create_task(drain(sub2))
+            await asyncio.wait_for(e.wait(), timeout=5.0)
+
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(sub1.get_message(), timeout=0.2)
+
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(sub2.get_message(), timeout=0.2)
+            task1.cancel()
+            task2.cancel()
+
     async def test_reconnect_subscription_survives(self, topic: str) -> None:
         reconnect = ReconnectConfig(enabled=True, initial_delay=0.1, max_delay=1.0)
 
