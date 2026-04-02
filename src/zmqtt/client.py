@@ -27,7 +27,7 @@ from zmqtt._internal.transport.tcp import open_tcp
 from zmqtt._internal.transport.tls import open_tls
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
-from zmqtt.errors import MQTTDisconnectedError, MQTTTimeoutError
+from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTTimeoutError
 
 __all__ = (
     "MQTTClient",
@@ -54,12 +54,15 @@ class ReconnectConfig:
         initial_delay: Seconds to wait before the first reconnection attempt.
         max_delay: Upper bound (seconds) for the exponential back-off delay.
         backoff_factor: Multiplier applied to the delay after each failed attempt.
+        max_attempts: Maximum total number of connection attempts before
+            giving up. ``None`` retries indefinitely.
     """
 
     enabled: bool = True
     initial_delay: float = 1.0
     max_delay: float = 60.0
     backoff_factor: float = 2.0
+    max_attempts: int | None = 5
 
 
 async def _default_transport_factory(
@@ -337,7 +340,7 @@ class MQTTClient:
 
     async def __aenter__(self) -> Self:
         """Connect to the broker and start the background run loop."""
-        await self._connect()
+        await self._connect_with_retry()
         self._run_task = asyncio.create_task(self._run_loop())
         return self
 
@@ -537,8 +540,26 @@ class MQTTClient:
             raise
         self._protocol = protocol
 
-    async def _run_loop(self) -> None:  # noqa: C901
+    async def _connect_with_retry(self) -> None:
         delay = self._reconnect.initial_delay
+        attempt = 0
+        while True:
+            try:
+                await self._connect()
+            except MQTTConnectError:  # noqa: PERF203
+                raise
+            except OSError:
+                attempt += 1
+                max_a = self._reconnect.max_attempts
+                if not self._reconnect.enabled or (max_a is not None and attempt >= max_a):
+                    raise
+                log.warning("Connection failed, retrying in %.1fs", delay, exc_info=True)
+                await asyncio.sleep(delay)
+                delay = min(delay * self._reconnect.backoff_factor, self._reconnect.max_delay)
+            else:
+                return
+
+    async def _run_loop(self) -> None:
         subs_to_restore: list[Subscription] = []
 
         while True:
@@ -567,25 +588,9 @@ class MQTTClient:
                 return  # clean disconnect — protocol.disconnect() was called
 
             subs_to_restore = list(self._subscriptions)
-
-            while True:
-                log.warning("Connection lost, reconnecting in %.1fs", delay)
-                await asyncio.sleep(delay)
-                try:
-                    await self._connect()
-                    delay = self._reconnect.initial_delay
-                    log.info("Successfully reconnected")
-                    break
-                except Exception:  # noqa: BLE001
-                    log.warning("Reconnect failed", exc_info=True)
-                    if self._protocol is not None:
-                        with contextlib.suppress(Exception):
-                            await self._protocol.disconnect()
-                        self._protocol = None
-                    delay = min(
-                        delay * self._reconnect.backoff_factor,
-                        self._reconnect.max_delay,
-                    )
+            log.warning("Connection lost, reconnecting...")
+            await self._connect_with_retry()
+            log.info("Successfully reconnected")
 
 
 @overload

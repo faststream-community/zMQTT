@@ -94,4 +94,4 @@ patch_tags = ["fix", "feat", "perf", "chore"]
 [tool.semantic_release.branches.main]
 match = "master"
 prerelease_token = "alpha"
-prerelease = true
+prerelease = false
