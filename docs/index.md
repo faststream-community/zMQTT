@@ -1,6 +1,6 @@
 # zmqtt
 
-Pure asyncio MQTT 3.1.1 / 5.0 client — clean API, no legacy baggage.
+Pure asyncio MQTT 3.1.1 / 5.0 client.
 
 ## Install
 

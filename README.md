@@ -1,6 +1,6 @@
 # zmqtt
 
-Pure asyncio MQTT 3.1.1 and 5.0 client library. No paho dependency, no threading, no god classes.
+Pure asyncio MQTT 3.1.1 and 5.0 client library. No paho dependency, no threading, no god classes. See [documentation](https://faststream-community.github.io/zMQTT/).
 
 ## Why not aiomqtt?
 
@@ -9,14 +9,13 @@ You inherit paho's threading model, 10 000-line files, and implicit global state
 
 zmqtt is built from scratch:
 
-| | zmqtt | aiomqtt (paho) |
-|---|---|---|
-| I/O model | pure asyncio | paho threads + asyncio bridge |
-| Packet codec | pure functions, I/O-free | paho internals |
-| MQTT 5.0 | native, typed properties dataclasses | partial |
-| Type annotations | strict mypy | partial |
-| Backpressure | bounded subscription queues | none |
-| QoS 2 | full state machine | paho impl |
+|                  | zmqtt                                | aiomqtt (paho)                |
+| ---------------- | ------------------------------------ | ----------------------------- |
+| I/O model        | pure asyncio                         | paho threads + asyncio bridge |
+| Packet codec     | pure functions, I/O-free             | paho internals                |
+| MQTT 5.0         | native, typed properties dataclasses | partial                       |
+| Type annotations | strict mypy                          | partial                       |
+| Backpressure     | bounded subscription queues          | none                          |
 
 ## Installation
 
@@ -35,6 +34,28 @@ async def main():
         async with client.subscribe("sensors/#") as messages:
             async for msg in messages:
                 print(msg.topic, msg.payload)
+
+asyncio.run(main())
+```
+
+Or manage connections and subscriptions manually:
+
+```python
+import asyncio
+from zmqtt import MQTTClient
+
+async def main():
+    client = MQTTClient("broker.example.com")
+    await client.connect()
+
+    subscription = client.subscribe("sensors/#")
+    await subscription.start()
+
+    msg = await subscription.get_message()
+    print(msg.topic, msg.payload)
+
+    await subscription.stop()
+    await client.disconnect()
 
 asyncio.run(main())
 ```
@@ -93,17 +114,3 @@ async with MQTTClient("broker.example.com", version=5) as client:
     props = PublishProperties(content_type="application/json")
     await client.publish("topic", b'{"value": 42}', properties=props)
 ```
-
-## Architecture
-
-```
-src/zmqtt/
-  packets/        # I/O-free codec: frozen dataclasses + pure encode/decode
-  transport/      # thin asyncio reader/writer (TCP, TLS)
-  state.py        # session state, QoS 2 state machine
-  protocol.py     # packet dispatch, ping loop, flow control
-  client.py       # public API: MQTTClient, Subscription
-```
-
-The codec layer has zero asyncio imports — every packet type is a frozen dataclass,
-serialization and parsing are pure functions. This makes the entire codec trivially testable.
