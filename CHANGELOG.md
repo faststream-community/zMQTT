@@ -1,6 +1,23 @@
 # CHANGELOG
 
 
+## v0.0.1 (2026-04-03)
+
+### Documentation
+
+- Add link to readme, minor fixes ([#16](https://github.com/faststream-community/zMQTT/pull/16),
+  [`e054875`](https://github.com/faststream-community/zMQTT/commit/e05487597f971dc9c8f9130158662c516947decc))
+
+### Features
+
+- Add support for shared subscriptions
+  ([#18](https://github.com/faststream-community/zMQTT/pull/18),
+  [`78199b6`](https://github.com/faststream-community/zMQTT/commit/78199b6c8d651bc173a50f53bea31e6a707891ba))
+
+- Improve reconnection strategy ([#17](https://github.com/faststream-community/zMQTT/pull/17),
+  [`2d97821`](https://github.com/faststream-community/zMQTT/commit/2d97821afb08aee425c52afebe1f8702745706f0))
+
+
 ## v0.0.1-alpha.5 (2026-03-24)
 
 ### Chores
@@ -68,6 +85,8 @@
 
 - Add release pipeline
   ([`071b85d`](https://github.com/faststream-community/zMQTT/commit/071b85d167c6b26a8dd0c85bc08f4ea65f86958c))
+
+chore: Add release pipeline
 
 - Add release pipeline
   ([`77ae34f`](https://github.com/faststream-community/zMQTT/commit/77ae34f6da88f108d8547b61892a1af064cd09bb))
