@@ -1,6 +1,15 @@
 # CHANGELOG
 
 
+## v0.0.2 (2026-04-05)
+
+### Features
+
+- Implement request-response pattern for mqtt 5
+  ([#19](https://github.com/faststream-community/zMQTT/pull/19),
+  [`1ce6826`](https://github.com/faststream-community/zMQTT/commit/1ce682699c58e352e173c67e048b93a34d7749ec))
+
+
 ## v0.0.1 (2026-04-03)
 
 ### Documentation
