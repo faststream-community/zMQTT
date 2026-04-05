@@ -561,7 +561,10 @@ class MQTTClient:
         else:
             reply_topic = f"_zmqtt/reply/{os.urandom(16).hex()}"
 
-        corr = (properties.correlation_data if properties is not None else None) or os.urandom(16)
+        if properties is not None and properties.correlation_data is not None:
+            corr = properties.correlation_data
+        else:
+            corr = os.urandom(16)
 
         if properties is not None:
             req_props = dataclasses.replace(
