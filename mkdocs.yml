@@ -33,6 +33,7 @@ nav:
     - Reconnection: advanced/reconnection.md
     - Ping: advanced/ping.md
     - MQTT 5.0: advanced/mqtt5.md
+    - Request / Response: advanced/request-response.md
     - Backpressure: advanced/backpressure.md
     - Scaling: advanced/scaling.md
   - Error Handling: error-handling.md

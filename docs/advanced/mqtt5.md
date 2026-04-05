@@ -88,6 +88,20 @@ async with client.subscribe(
 !!! warning
     `no_local` and `retain_as_published` raise `RuntimeError` when used on a `version="3.1.1"` connection.
 
+## Request / response (`client.request()`)
+
+Send a request and await exactly one reply in a single call:
+
+```python
+reply = await client.request("services/echo", b"hello", timeout=5.0)
+print(reply.payload)  # b"hello"
+```
+
+zmqtt manages the reply topic subscription, the `response_topic` /
+`correlation_data` PUBLISH properties, and cleanup on timeout or
+cancellation automatically. See [Request / Response](request-response.md)
+for the full API and responder example.
+
 ## Enhanced authentication (`client.auth()`)
 
 Send an AUTH packet for extended authentication flows (e.g. SCRAM, Kerberos):

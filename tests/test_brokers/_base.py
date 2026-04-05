@@ -6,6 +6,7 @@ Run with:  pytest -m broker
 
 import abc
 import asyncio
+import contextlib
 import uuid
 from collections.abc import AsyncGenerator
 from typing import ClassVar, Literal
@@ -13,6 +14,7 @@ from typing import ClassVar, Literal
 import pytest
 
 from zmqtt import MQTTClient, QoS, ReconnectConfig, Subscription
+from zmqtt._internal.packets.properties import PublishProperties
 
 
 @pytest.mark.broker
@@ -300,3 +302,51 @@ class BrokerTestBase(abc.ABC):
             await msg.ack()
 
         assert msg.payload == b"ack-qos2"
+
+    async def test_request_response(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            responder.subscribe(topic) as req_sub,
+        ):
+
+            async def respond() -> None:
+                msg = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+                assert msg.properties is not None
+                assert msg.properties.response_topic is not None
+                await responder.publish(
+                    msg.properties.response_topic,
+                    b"pong",
+                    properties=PublishProperties(
+                        correlation_data=msg.properties.correlation_data,
+                    ),
+                )
+
+            responder_task = asyncio.create_task(respond())
+            reply = await requester.request(topic, b"ping", timeout=5.0)
+            await responder_task
+
+        assert reply.payload == b"pong"
+        assert reply.properties is not None
+        assert reply.properties.correlation_data is not None
+
+    async def test_request_timeout(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        async with MQTTClient(self.host, self.port, version=self.version) as client:
+            with pytest.raises(asyncio.TimeoutError):
+                await client.request(topic + "/nobody-listening", b"ping", timeout=0.3)
+
+    async def test_request_reply_topic_unsubscribed_after_timeout(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        async with MQTTClient(self.host, self.port, version=self.version) as client:
+            sub_count_before = len(client._subscriptions)
+            with contextlib.suppress(asyncio.TimeoutError):
+                await client.request(topic + "/void", b"x", timeout=0.1)
+            assert len(client._subscriptions) == sub_count_before

@@ -20,3 +20,7 @@ class MQTTDisconnectedError(MQTTError):
 
 class MQTTTimeoutError(MQTTError):
     """An MQTT operation did not complete within the allotted time."""
+
+
+class MQTTInvalidTopicError(MQTTError):
+    """Topic string or topic filter failed MQTT validation."""

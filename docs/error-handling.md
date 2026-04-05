@@ -7,7 +7,8 @@ MQTTError
   ├── MQTTConnectError      # CONNACK refused (return_code attribute)
   ├── MQTTProtocolError     # malformed or unexpected packet
   ├── MQTTDisconnectedError # connection lost unexpectedly
-  └── MQTTTimeoutError      # ping or operation timed out
+  ├── MQTTTimeoutError      # ping or operation timed out
+  └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
 
 All exceptions are importable from `zmqtt`:
@@ -19,6 +20,7 @@ from zmqtt import (
     MQTTProtocolError,
     MQTTDisconnectedError,
     MQTTTimeoutError,
+    MQTTInvalidTopicError,
 )
 ```
 
@@ -70,6 +72,62 @@ except MQTTTimeoutError:
 ```
 
 See [Manual Ping](advanced/ping.md) for the full `ping()` API.
+
+### `MQTTInvalidTopicError`
+
+Raised when a topic string fails MQTT validation. The check happens eagerly —
+before any I/O — in `publish()`, `subscribe()`, and `request()`.
+
+**`publish()` — topic name rules:**
+
+- Must not be empty.
+- Must not contain `+` or `#` (wildcards are for filters only).
+- `$` is only valid as the very first character.
+
+```python
+from zmqtt import MQTTInvalidTopicError
+
+try:
+    await client.publish("sensors/+/temp", b"22.5")
+except MQTTInvalidTopicError as e:
+    print(e)  # Wildcards not allowed in publish topic: 'sensors/+/temp'
+```
+
+**`subscribe()` — topic filter rules:**
+
+- Must not be empty.
+- `#` must be the last character and, if not the only character, must be
+  preceded by `/`.
+- `+` must occupy an entire level (e.g. `a/+/b` is valid; `a/temp+/b` is not).
+- `$` is only valid as the very first character.
+
+```python
+try:
+    client.subscribe("sensors#")          # missing preceding '/'
+    client.subscribe("sensors/temp+/data") # '+' not a full level
+except MQTTInvalidTopicError as e:
+    print(e)
+```
+
+**`request()` — response topic rules:**
+
+The `response_topic` property follows the same rules as a publish topic (no
+wildcards):
+
+```python
+from zmqtt import MQTTInvalidTopicError, PublishProperties
+
+try:
+    await client.request(
+        "cmd",
+        b"x",
+        properties=PublishProperties(response_topic="reply/+/bad"),
+    )
+except MQTTInvalidTopicError as e:
+    print(e)
+```
+
+See [Request / Response](advanced/request-response.md) for details.
 
 ## Reconnection interaction
 

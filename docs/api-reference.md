@@ -96,3 +96,7 @@
 ::: zmqtt.MQTTTimeoutError
     options:
       show_source: false
+
+::: zmqtt.MQTTInvalidTopicError
+    options:
+      show_source: false

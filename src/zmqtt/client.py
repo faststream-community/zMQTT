@@ -2,7 +2,9 @@
 
 import asyncio
 import contextlib
+import dataclasses
 import logging
+import os
 import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -27,6 +29,7 @@ from zmqtt._internal.transport.tcp import open_tcp
 from zmqtt._internal.transport.tls import open_tls
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
+from zmqtt._internal.types.topic import validate_publish, validate_response_topic, validate_subscribe_topic
 from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTTimeoutError
 
 __all__ = (
@@ -139,6 +142,16 @@ class MQTTClientV5(Protocol):
     async def auth(self, method: str, data: bytes | None = None) -> None: ...
 
     async def ping(self, timeout: float = 10.0) -> float: ...
+
+    async def request(
+        self,
+        topic: str,
+        payload: bytes | str,
+        *,
+        qos: QoS = QoS.AT_MOST_ONCE,
+        timeout: float = 30.0,
+        properties: PublishProperties | None = None,
+    ) -> "Message": ...
 
 
 class Subscription:
@@ -402,9 +415,12 @@ class MQTTClient:
             properties: MQTT 5.0 publish properties. Raises if used with MQTT 3.1.1.
 
         Raises:
+            MQTTInvalidTopicError: If *topic* is empty, contains wildcards, or has
+                ``$`` in a non-leading position.
             MQTTDisconnectedError: If the client is not currently connected.
             RuntimeError: If *properties* is supplied on an MQTT 3.1.1 connection.
         """
+        validate_publish(topic)
         if self._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
@@ -475,9 +491,14 @@ class MQTTClient:
                 (MQTT 5.0 only).
 
         Raises:
+            MQTTInvalidTopicError: If any filter is empty, has ``$`` in a non-leading
+                position, or contains a malformed wildcard (e.g. ``sensors#`` or
+                ``a/b#/c``).
             RuntimeError: If *no_local* or *retain_as_published* are used on an
                 MQTT 3.1.1 connection.
         """
+        for f in filters:
+            validate_subscribe_topic(f)
         if (no_local or retain_as_published) and self._version != "5.0":
             msg = "no_local and retain_as_published require MQTT 5.0"
             raise RuntimeError(msg)
@@ -490,6 +511,73 @@ class MQTTClient:
             no_local,
             retain_as_published,
         )
+
+    async def request(
+        self,
+        topic: str,
+        payload: bytes | str,
+        *,
+        qos: QoS = QoS.AT_MOST_ONCE,
+        timeout: float = 30.0,
+        properties: PublishProperties | None = None,
+    ) -> Message:
+        """Send a request and wait for exactly one reply (MQTT 5.0 only).
+
+        Publishes *payload* to *topic* with a ``response_topic`` property, then
+        waits for the first message that arrives on that topic and returns it.
+
+        Both ``response_topic`` and ``correlation_data`` are taken from
+        *properties* when set; otherwise they are generated automatically
+        (a unique ``_zmqtt/reply/<32 hex chars>`` topic and 16 random bytes
+        respectively).
+
+        Args:
+            topic: Request topic. Must not contain wildcards.
+            payload: Request body. ``str`` values are UTF-8 encoded automatically.
+            qos: QoS for the outgoing request publish.
+            timeout: Seconds to wait for the reply before raising
+                ``asyncio.TimeoutError``.
+            properties: Publish properties for the request. ``response_topic``
+                selects the reply topic (must not contain wildcards
+                [MQTT-3.3.2-14]). ``correlation_data`` is forwarded as-is to
+                the responder.
+
+        Returns:
+            The first ``Message`` received on the reply topic.
+
+        Raises:
+            RuntimeError: If the client is not using MQTT 5.0.
+            MQTTInvalidTopicError: If ``properties.response_topic`` contains wildcards.
+            MQTTDisconnectedError: If the connection is lost while waiting.
+            asyncio.TimeoutError: If no reply arrives within *timeout* seconds.
+        """
+        if self._version != "5.0":
+            msg = "request() requires MQTT 5.0"
+            raise RuntimeError(msg)
+
+        if properties is not None and properties.response_topic is not None:
+            reply_topic = properties.response_topic
+            validate_response_topic(reply_topic)
+        else:
+            reply_topic = f"_zmqtt/reply/{os.urandom(16).hex()}"
+
+        corr = (properties.correlation_data if properties is not None else None) or os.urandom(16)
+
+        if properties is not None:
+            req_props = dataclasses.replace(
+                properties,
+                response_topic=reply_topic,
+                correlation_data=corr,
+            )
+        else:
+            req_props = PublishProperties(
+                response_topic=reply_topic,
+                correlation_data=corr,
+            )
+
+        async with self.subscribe(reply_topic, receive_buffer_size=1) as sub:
+            await self.publish(topic, payload, qos=qos, properties=req_props)
+            return await asyncio.wait_for(sub.get_message(), timeout=timeout)
 
     async def auth(self, method: str, data: bytes | None = None) -> None:
         """Send an AUTH packet for enhanced authentication (MQTT 5.0 only).
