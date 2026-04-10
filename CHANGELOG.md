@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.0.4 (2026-04-10)
+
+### Bug Fixes
+
+- Accepting tls=None in client ([#22](https://github.com/faststream-community/zMQTT/pull/22),
+  [`4e1fcc9`](https://github.com/faststream-community/zMQTT/commit/4e1fcc913f5a5a8d00d1f7a64e06e9a78f705ea6))
+
+
 ## v0.0.3 (2026-04-06)
 
 ### Bug Fixes
