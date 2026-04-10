@@ -42,7 +42,7 @@ __all__ = (
     "create_client",
 )
 
-TransportFactory = Callable[[str, int, ssl.SSLContext | bool], Awaitable[Transport]]
+TransportFactory = Callable[[str, int, ssl.SSLContext | bool | None], Awaitable[Transport]]
 
 log = logging.getLogger(__name__)
 
@@ -71,9 +71,9 @@ class ReconnectConfig:
 async def _default_transport_factory(
     host: str,
     port: int,
-    tls: ssl.SSLContext | bool,
+    tls: ssl.SSLContext | bool | None,
 ) -> Transport:
-    if tls is False:
+    if not tls:
         return await open_tcp(host, port)
     if tls is True:
         return await open_tls(host, port)
@@ -298,7 +298,7 @@ class MQTTClient:
         clean_session: bool = True,
         username: str | None = None,
         password: str | None = None,
-        tls: ssl.SSLContext | bool = False,
+        tls: ssl.SSLContext | bool | None = None,
         reconnect: ReconnectConfig | None = None,
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
