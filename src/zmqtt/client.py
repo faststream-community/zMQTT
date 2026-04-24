@@ -22,7 +22,7 @@ from zmqtt._internal.packets.properties import (
 )
 from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.subscribe import SubscriptionRequest
-from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.protocol import MQTTProtocol, ProtocolConfig
 from zmqtt._internal.state import SessionState
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
@@ -608,8 +608,10 @@ class MQTTClient:
         protocol = MQTTProtocol(
             transport,
             SessionState(),
-            keepalive=self._keepalive,
-            version=self._version,
+            config=ProtocolConfig(
+                keepalive=self._keepalive,
+                version=self._version,
+            ),
         )
         connect_props = None
         if self._version == "5.0":

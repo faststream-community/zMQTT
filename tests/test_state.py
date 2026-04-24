@@ -77,6 +77,7 @@ def test_qos1_flight_fields() -> None:
     flight = QoS1Flight(packet_id=1, publish=publish, future=future)
     assert flight.packet_id == 1
     assert flight.publish is publish
+    assert flight.retransmit_task is None
     loop.close()
 
 
@@ -98,6 +99,7 @@ def test_outbound_qos2_initial_state() -> None:
         future=future,
     )
     assert flight.state is OutboundQoS2State.PENDING_PUBREC
+    assert flight.retransmit_task is None
     flight.state = OutboundQoS2State.PENDING_PUBCOMP
     assert flight.state is OutboundQoS2State.PENDING_PUBCOMP
     loop.close()

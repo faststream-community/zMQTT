@@ -8,13 +8,14 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
+from collections.abc import Callable
 
 import pytest
 
-from zmqtt._internal.packets.codec import encode
+from zmqtt._internal.packets.codec import decode, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
-from zmqtt._internal.packets.publish import PubAck, Publish
-from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
+from zmqtt._internal.protocol import MQTTProtocol, ProtocolConfig
 from zmqtt._internal.state import SessionState, SubscriptionEntry
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -54,14 +55,18 @@ class FakeTransport:
 def make_protocol(
     keepalive: int = 60,
     ping_timeout: float = 5.0,
+    retransmit_interval: float = 5.0,
 ) -> tuple[MQTTProtocol, FakeTransport]:
     transport = FakeTransport()
     state = SessionState()
     protocol = MQTTProtocol(
         transport,
         state,
-        keepalive=keepalive,
-        ping_timeout=ping_timeout,
+        config=ProtocolConfig(
+            keepalive=keepalive,
+            ping_timeout=ping_timeout,
+            retransmit_interval=retransmit_interval,
+        ),
     )
     return protocol, transport
 
@@ -76,6 +81,25 @@ async def _stop_task(task: asyncio.Task[None]) -> None:
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+def _decode_packet(data: bytes) -> object:
+    decoded = decode(data, version="3.1.1")
+    assert decoded is not None
+    return decoded[0]
+
+
+def _decoded_sent(transport: FakeTransport) -> list[object]:
+    return [_decode_packet(data) for data in transport.sent]
+
+
+async def _wait_until(predicate: Callable[[], bool], timeout: float = 1.0) -> None:
+    start = asyncio.get_running_loop().time()
+
+    while not predicate():
+        if asyncio.get_running_loop().time() - start > timeout:
+            raise asyncio.TimeoutError
+        await asyncio.sleep(0.01)
 
 
 async def test_connect_refused_raises() -> None:
@@ -171,3 +195,155 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
     assert transport.sent == []  # no PUBREC for duplicate
 
     await _stop_task(read_task)
+
+
+async def test_qos1_publish_retransmit_sets_dup() -> None:
+    protocol, transport = make_protocol(retransmit_interval=0.02)
+    read_task = await _run_read_loop(protocol)
+
+    publish_task = asyncio.create_task(
+        protocol.publish(
+            Publish(
+                topic="t/x",
+                payload=b"once",
+                qos=QoS.AT_LEAST_ONCE,
+                retain=False,
+                dup=False,
+            ),
+        ),
+    )
+
+    await _wait_until(lambda: len(transport.sent) >= 2)
+    sent = _decoded_sent(transport)
+    publishes = [packet for packet in sent if isinstance(packet, Publish)]
+    assert len(publishes) >= 2
+    assert publishes[0].dup is False
+    assert publishes[1].dup is True
+    assert publishes[0].packet_id == publishes[1].packet_id
+
+    packet_id = publishes[0].packet_id
+    assert packet_id is not None
+    transport.feed(encode(PubAck(packet_id=packet_id), version="3.1.1"))
+
+    await asyncio.wait_for(publish_task, timeout=1.0)
+    await _stop_task(read_task)
+
+
+async def test_qos2_publish_retransmits_publish_and_pubrel() -> None:
+    protocol, transport = make_protocol(retransmit_interval=0.02)
+    read_task = await _run_read_loop(protocol)
+
+    publish_task = asyncio.create_task(
+        protocol.publish(
+            Publish(
+                topic="t/x",
+                payload=b"once",
+                qos=QoS.EXACTLY_ONCE,
+                retain=False,
+                dup=False,
+            ),
+        ),
+    )
+
+    await _wait_until(
+        lambda: len([packet for packet in _decoded_sent(transport) if isinstance(packet, Publish)]) >= 2,
+    )
+    sent = _decoded_sent(transport)
+    publishes = [packet for packet in sent if isinstance(packet, Publish)]
+    assert publishes[0].dup is False
+    assert publishes[1].dup is True
+    assert publishes[0].packet_id == publishes[1].packet_id
+
+    packet_id = publishes[0].packet_id
+    assert packet_id is not None
+    transport.feed(encode(PubRec(packet_id=packet_id), version="3.1.1"))
+
+    await _wait_until(lambda: any(isinstance(packet, PubRel) for packet in _decoded_sent(transport)))
+    await _wait_until(lambda: len([packet for packet in _decoded_sent(transport) if isinstance(packet, PubRel)]) >= 2)
+
+    transport.feed(encode(PubComp(packet_id=packet_id), version="3.1.1"))
+    await asyncio.wait_for(publish_task, timeout=1.0)
+    await _stop_task(read_task)
+
+
+async def test_qos2_duplicate_pubrec_resends_pubrel() -> None:
+    protocol, transport = make_protocol(retransmit_interval=1.0)
+    read_task = await _run_read_loop(protocol)
+
+    publish_task = asyncio.create_task(
+        protocol.publish(
+            Publish(
+                topic="t/x",
+                payload=b"once",
+                qos=QoS.EXACTLY_ONCE,
+                retain=False,
+                dup=False,
+            ),
+        ),
+    )
+
+    await _wait_until(lambda: any(isinstance(packet, Publish) for packet in _decoded_sent(transport)))
+    publishes = [packet for packet in _decoded_sent(transport) if isinstance(packet, Publish)]
+    packet_id = publishes[0].packet_id
+    assert packet_id is not None
+
+    transport.feed(encode(PubRec(packet_id=packet_id), version="3.1.1"))
+    await _wait_until(lambda: len([packet for packet in _decoded_sent(transport) if isinstance(packet, PubRel)]) >= 1)
+
+    transport.feed(encode(PubRec(packet_id=packet_id), version="3.1.1"))
+    await _wait_until(lambda: len([packet for packet in _decoded_sent(transport) if isinstance(packet, PubRel)]) >= 2)
+
+    transport.feed(encode(PubComp(packet_id=packet_id), version="3.1.1"))
+    await asyncio.wait_for(publish_task, timeout=1.0)
+    await _stop_task(read_task)
+
+
+async def test_qos1_publish_timeout_abandons_retransmit() -> None:
+    protocol, transport = make_protocol(retransmit_interval=0.02)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            protocol.publish(
+                Publish(
+                    topic="t/x",
+                    payload=b"once",
+                    qos=QoS.AT_LEAST_ONCE,
+                    retain=False,
+                    dup=False,
+                ),
+            ),
+            timeout=0.001,
+        )
+
+    await asyncio.sleep(0.05)
+
+    publishes = [packet for packet in _decoded_sent(transport) if isinstance(packet, Publish)]
+    assert len(publishes) == 1
+    assert protocol._state.inflight_qos1 == {}
+
+
+async def test_qos2_publish_timeout_abandons_retransmit() -> None:
+    protocol, transport = make_protocol(retransmit_interval=0.02)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            protocol.publish(
+                Publish(
+                    topic="t/x",
+                    payload=b"once",
+                    qos=QoS.EXACTLY_ONCE,
+                    retain=False,
+                    dup=False,
+                ),
+            ),
+            timeout=0.001,
+        )
+
+    await asyncio.sleep(0.05)
+
+    packets = _decoded_sent(transport)
+    publishes = [packet for packet in packets if isinstance(packet, Publish)]
+    pubrels = [packet for packet in packets if isinstance(packet, PubRel)]
+    assert len(publishes) == 1
+    assert pubrels == []
+    assert protocol._state.inflight_qos2_out == {}
