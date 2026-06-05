@@ -71,6 +71,12 @@ except MQTTTimeoutError:
     print("Broker not responding")
 ```
 
+It is also raised by the connect handshake when the broker accepts the TCP
+connection but does not send a CONNACK within `connect_timeout` seconds
+(default 30 s; see [Connecting](connecting.md)). When reconnection is enabled
+(the default), this is treated like any other connection failure: the client
+backs off and retries rather than surfacing the error.
+
 See [Manual Ping](advanced/ping.md) for the full `ping()` API.
 
 ### `MQTTInvalidTopicError`
