@@ -647,7 +647,7 @@ class MQTTClient:
                 await self._connect()
             except MQTTConnectError:  # noqa: PERF203
                 raise
-            except OSError:
+            except (OSError, MQTTTimeoutError):
                 attempt += 1
                 max_a = self._reconnect.max_attempts
                 if not self._reconnect.enabled or (max_a is not None and attempt >= max_a):
