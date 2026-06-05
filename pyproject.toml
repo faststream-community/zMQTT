@@ -71,7 +71,7 @@ ignore = ["D", "COM812", "TC001"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D", "PLR2004", "SLF001", "FBT001"]
-"src/zmqtt/_internal/protocol.py" = ["SLF001", "PLR2004"]
+"src/zmqtt/_internal/protocol.py" = ["SLF001", "PLR2004", "PLR0913"]
 "src/zmqtt/_internal/packets/codec.py" = ["PLR", "C901"]
 "src/zmqtt/client.py" = ["PLR0913", "SLF001", "FBT"]
 

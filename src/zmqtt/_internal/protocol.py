@@ -102,12 +102,14 @@ class MQTTProtocol:
         state: SessionState,
         keepalive: int = 60,
         ping_timeout: float = 10.0,
+        connect_timeout: float = 30.0,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
     ) -> None:
         self._transport = transport
         self._state = state
         self._keepalive = keepalive
         self._ping_timeout = ping_timeout
+        self._connect_timeout = connect_timeout
         self._version: Final = version
         self._buf = PacketBuffer(version=version)
         self._ping_waiters: list[asyncio.Future[None]] = []
@@ -115,9 +117,23 @@ class MQTTProtocol:
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
-        """Send CONNECT, read and return CONNACK. Raises on failure."""
+        """Send CONNECT, read and return CONNACK. Raises on failure.
+
+        Per MQTT 5.0 section 3.2, if the CONNACK is not received within
+        ``connect_timeout`` seconds the connection is presumed dead and
+        ``MQTTTimeoutError`` is raised (mirrors ``ping()``'s PINGRESP timeout).
+        """
         log.debug("Connecting", extra={"client_id": packet.client_id})
         await self._send(self._encode(packet))
+        try:
+            # No asyncio.shield (unlike ping): on timeout the transport is closed and
+            # replaced by _connect_with_retry, so keeping the read coroutine alive is pointless.
+            return await asyncio.wait_for(self._await_connack(), timeout=self._connect_timeout)
+        except asyncio.TimeoutError as e:
+            msg = "CONNACK not received within timeout"
+            raise MQTTTimeoutError(msg) from e
+
+    async def _await_connack(self) -> ConnAck:
         while True:
             data = await self._transport.read(4096)
             self._buf.feed(data)

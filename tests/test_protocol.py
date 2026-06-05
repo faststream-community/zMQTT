@@ -97,6 +97,26 @@ async def test_connect_wrong_packet_raises() -> None:
         await protocol.connect(connect)
 
 
+async def test_connect_timeout_raises() -> None:
+    transport = FakeTransport()
+    protocol = MQTTProtocol(transport, SessionState(), connect_timeout=0.05)
+    connect = Connect(client_id="test", clean_session=True, keepalive=60)
+    # Transport is never fed -> CONNACK never arrives -> the bounded wait fires.
+    with pytest.raises(MQTTTimeoutError):
+        await protocol.connect(connect)
+
+
+async def test_connect_succeeds_within_timeout() -> None:
+    transport = FakeTransport()
+    protocol = MQTTProtocol(transport, SessionState(), connect_timeout=5.0)
+    connect = Connect(client_id="test", clean_session=True, keepalive=60)
+    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))
+    ack = await protocol.connect(connect)
+    assert isinstance(ack, ConnAck)
+    assert ack.return_code == 0
+    assert ack.session_present is False
+
+
 async def test_ping_timeout_raises() -> None:
     protocol, _ = make_protocol(keepalive=0, ping_timeout=0.05)
     ping_task = asyncio.create_task(protocol._ping_loop())
