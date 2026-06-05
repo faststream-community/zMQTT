@@ -300,6 +300,7 @@ class MQTTClient:
         password: str | None = None,
         tls: ssl.SSLContext | bool | None = None,
         reconnect: ReconnectConfig | None = None,
+        connect_timeout: float = 30.0,
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
@@ -329,12 +330,17 @@ class MQTTClient:
                 for a plain TCP connection.
             reconnect: Reconnection policy. Defaults to
                 :class:`ReconnectConfig` with exponential back-off enabled.
+            connect_timeout: Seconds to wait for CONNACK before raising
+                :exc:`MQTTTimeoutError`. Must be positive. Defaults to ``30.0``.
             transport_factory: Override the low-level transport. Useful for testing.
             version: MQTT protocol version to use. Either ``"3.1.1"`` (default) or
                 ``"5.0"``.
             session_expiry_interval: MQTT 5.0 session expiry interval in seconds.
                 ``0`` means the session expires on disconnect.
         """
+        if not connect_timeout > 0:
+            msg = "connect_timeout must be positive"
+            raise ValueError(msg)
         self._host = host
         self._port = port
         self._client_id = client_id
@@ -344,6 +350,7 @@ class MQTTClient:
         self._password = password
         self._tls = tls
         self._reconnect = reconnect or ReconnectConfig()
+        self._connect_timeout = connect_timeout
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
         self._session_expiry_interval = session_expiry_interval
@@ -609,6 +616,7 @@ class MQTTClient:
             transport,
             SessionState(),
             keepalive=self._keepalive,
+            connect_timeout=self._connect_timeout,
             version=self._version,
         )
         connect_props = None
@@ -684,6 +692,7 @@ class MQTTClient:
             log.info("Successfully reconnected")
 
 
+# No version= argument: defaults to "3.1.1", so the return type is MQTTClientV311.
 @overload
 def create_client(
     host: str,
@@ -696,6 +705,25 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    connect_timeout: float = ...,
+    transport_factory: TransportFactory | None = ...,
+    session_expiry_interval: int = ...,
+) -> MQTTClientV311: ...
+
+
+@overload
+def create_client(
+    host: str,
+    port: int = ...,
+    *,
+    client_id: str = ...,
+    keepalive: int = ...,
+    clean_session: bool = ...,
+    username: str | None = ...,
+    password: str | None = ...,
+    tls: ssl.SSLContext | bool = ...,
+    reconnect: ReconnectConfig | None = ...,
+    connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     version: Literal["3.1.1"],
@@ -714,6 +742,7 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     version: Literal["5.0"],
@@ -731,6 +760,7 @@ def create_client(
     password: str | None = None,
     tls: ssl.SSLContext | bool = False,
     reconnect: ReconnectConfig | None = None,
+    connect_timeout: float = 30.0,
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
     version: Literal["3.1.1", "5.0"] = "3.1.1",
@@ -750,6 +780,7 @@ def create_client(
         password=password,
         tls=tls,
         reconnect=reconnect,
+        connect_timeout=connect_timeout,
         transport_factory=transport_factory,
         version=version,
         session_expiry_interval=session_expiry_interval,
