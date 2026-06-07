@@ -23,7 +23,7 @@ def test_non_positive_connect_timeout_raises(bad: float) -> None:
         create_client("localhost", connect_timeout=bad)
 
 
-class _FakeTransport:
+class FakeTransport:
     """Minimal Transport: read() hangs until fed; tracks close()."""
 
     def __init__(self, feed: bytes | None = None) -> None:
@@ -52,10 +52,10 @@ class _FakeTransport:
 async def test_connect_retries_after_connack_timeout() -> None:
     connack = encode(ConnAck(session_present=False, return_code=0), version="3.1.1")
     transports = [
-        _FakeTransport(),  # 1st attempt: never CONNACKs -> times out
-        _FakeTransport(feed=connack),  # 2nd attempt: succeeds
+        FakeTransport(),  # 1st attempt: never CONNACKs -> times out
+        FakeTransport(feed=connack),  # 2nd attempt: succeeds
     ]
-    made: list[_FakeTransport] = []
+    made: list[FakeTransport] = []
 
     async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
         transport = transports[len(made)]
@@ -77,10 +77,10 @@ async def test_connect_retries_after_connack_timeout() -> None:
 
 
 async def test_connect_timeout_gives_up_after_max_attempts() -> None:
-    made: list[_FakeTransport] = []
+    made: list[FakeTransport] = []
 
     async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
-        transport = _FakeTransport()  # never fed -> CONNACK never arrives -> times out
+        transport = FakeTransport()  # never fed -> CONNACK never arrives -> times out
         made.append(transport)
         return transport
 
