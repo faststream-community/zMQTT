@@ -65,7 +65,7 @@ async with create_client("broker.example.com", port=8883, tls=ctx) as client:
 | `password` | `None` | MQTT password |
 | `tls` | `False` | TLS configuration (see above) |
 | `reconnect` | `ReconnectConfig()` | Reconnection behaviour — see [Reconnection](advanced/reconnection.md) |
-| `connect_timeout` | `30.0` | Seconds to wait for the broker's CONNACK before raising `MQTTTimeoutError` (must be `> 0`). Treated as retryable when reconnection is enabled. |
+| `mqtt_connect_timeout` | `30.0` | Seconds to wait for the broker's CONNACK before raising `MQTTTimeoutError` (must be `> 0`). Treated as retryable when reconnection is enabled. |
 | `session_expiry_interval` | `0` | MQTT 5.0 session expiry in seconds (ignored on 3.1.1) |
 | `version` | `"3.1.1"` | Protocol version: `"3.1.1"` or `"5.0"` |
 

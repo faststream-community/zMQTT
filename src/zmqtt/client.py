@@ -300,7 +300,7 @@ class MQTTClient:
         password: str | None = None,
         tls: ssl.SSLContext | bool | None = None,
         reconnect: ReconnectConfig | None = None,
-        connect_timeout: float = 30.0,
+        mqtt_connect_timeout: float = 30.0,
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
@@ -330,16 +330,18 @@ class MQTTClient:
                 for a plain TCP connection.
             reconnect: Reconnection policy. Defaults to
                 :class:`ReconnectConfig` with exponential back-off enabled.
-            connect_timeout: Seconds to wait for CONNACK before raising
-                :exc:`MQTTTimeoutError`. Must be positive. Defaults to ``30.0``.
+            mqtt_connect_timeout: Seconds to wait for the broker's CONNACK during
+                the MQTT CONNECT/CONNACK handshake — distinct from the TCP socket
+                connect — before raising :exc:`MQTTTimeoutError`. Must be positive.
+                Defaults to ``30.0``.
             transport_factory: Override the low-level transport. Useful for testing.
             version: MQTT protocol version to use. Either ``"3.1.1"`` (default) or
                 ``"5.0"``.
             session_expiry_interval: MQTT 5.0 session expiry interval in seconds.
                 ``0`` means the session expires on disconnect.
         """
-        if not connect_timeout > 0:
-            msg = "connect_timeout must be positive"
+        if not mqtt_connect_timeout > 0:
+            msg = "mqtt_connect_timeout must be positive"
             raise ValueError(msg)
         self._host = host
         self._port = port
@@ -350,7 +352,7 @@ class MQTTClient:
         self._password = password
         self._tls = tls
         self._reconnect = reconnect or ReconnectConfig()
-        self._connect_timeout = connect_timeout
+        self._mqtt_connect_timeout = mqtt_connect_timeout
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
         self._session_expiry_interval = session_expiry_interval
@@ -616,7 +618,7 @@ class MQTTClient:
             transport,
             SessionState(),
             keepalive=self._keepalive,
-            connect_timeout=self._connect_timeout,
+            connect_timeout=self._mqtt_connect_timeout,
             version=self._version,
         )
         connect_props = None
@@ -705,7 +707,7 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
-    connect_timeout: float = ...,
+    mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
 ) -> MQTTClientV311: ...
@@ -723,7 +725,7 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
-    connect_timeout: float = ...,
+    mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     version: Literal["3.1.1"],
@@ -742,7 +744,7 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
-    connect_timeout: float = ...,
+    mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     version: Literal["5.0"],
@@ -760,7 +762,7 @@ def create_client(
     password: str | None = None,
     tls: ssl.SSLContext | bool = False,
     reconnect: ReconnectConfig | None = None,
-    connect_timeout: float = 30.0,
+    mqtt_connect_timeout: float = 30.0,
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
     version: Literal["3.1.1", "5.0"] = "3.1.1",
@@ -780,7 +782,7 @@ def create_client(
         password=password,
         tls=tls,
         reconnect=reconnect,
-        connect_timeout=connect_timeout,
+        mqtt_connect_timeout=mqtt_connect_timeout,
         transport_factory=transport_factory,
         version=version,
         session_expiry_interval=session_expiry_interval,

@@ -12,15 +12,15 @@ from zmqtt._internal.packets.connect import ConnAck
 from zmqtt._internal.transport.base import Transport
 
 
-def test_connect_timeout_default_is_30s() -> None:
+def test_mqtt_connect_timeout_default_is_30s() -> None:
     client = MQTTClient("localhost")
-    assert client._connect_timeout == 30.0
+    assert client._mqtt_connect_timeout == 30.0
 
 
 @pytest.mark.parametrize("bad", [0, -1, -0.5, float("nan")])
-def test_non_positive_connect_timeout_raises(bad: float) -> None:
-    with pytest.raises(ValueError, match="connect_timeout must be positive"):
-        create_client("localhost", connect_timeout=bad)
+def test_non_positive_mqtt_connect_timeout_raises(bad: float) -> None:
+    with pytest.raises(ValueError, match="mqtt_connect_timeout must be positive"):
+        create_client("localhost", mqtt_connect_timeout=bad)
 
 
 class FakeTransport:
@@ -64,7 +64,7 @@ async def test_connect_retries_after_connack_timeout() -> None:
 
     client = MQTTClient(
         "localhost",
-        connect_timeout=0.05,
+        mqtt_connect_timeout=0.05,
         reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None),
         transport_factory=factory,
     )
@@ -76,7 +76,7 @@ async def test_connect_retries_after_connack_timeout() -> None:
     assert client._protocol is not None
 
 
-async def test_connect_timeout_gives_up_after_max_attempts() -> None:
+async def test_mqtt_connect_timeout_gives_up_after_max_attempts() -> None:
     made: list[FakeTransport] = []
 
     async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
@@ -86,7 +86,7 @@ async def test_connect_timeout_gives_up_after_max_attempts() -> None:
 
     client = MQTTClient(
         "localhost",
-        connect_timeout=0.05,
+        mqtt_connect_timeout=0.05,
         reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=1),
         transport_factory=factory,
     )
