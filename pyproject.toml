@@ -1,6 +1,6 @@
 [project]
 name = "zmqtt"
-version = "0.0.4"
+version = "0.0.5"
 description = "Pure asyncio MQTT 3.1.1/5.0 client library"
 readme = "README.md"
 license = "MIT"
@@ -31,6 +31,7 @@ Homepage = "https://github.com/faststream-community/zMQTT"
 Repository = "https://github.com/faststream-community/zMQTT"
 Documentation = "https://faststream-community.github.io/zMQTT/"
 Issues = "https://github.com/faststream-community/zMQTT/issues"
+
 
 [build-system]
 requires = ["uv_build>=0.9.7,<0.11.0"]

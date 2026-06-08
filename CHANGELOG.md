@@ -1,6 +1,22 @@
 # CHANGELOG
 
 
+## v0.0.5 (2026-06-08)
+
+### Documentation
+
+- Fix github url ([#25](https://github.com/faststream-community/zMQTT/pull/25),
+  [`f8e174e`](https://github.com/faststream-community/zMQTT/commit/f8e174e2d6d95b5bb6ec62169a243d3d737fdb6a))
+
+### Features
+
+- Bound the CONNACK wait with a configurable connect_timeout
+  ([#27](https://github.com/faststream-community/zMQTT/pull/27),
+  [`3185373`](https://github.com/faststream-community/zMQTT/commit/3185373a7ace45e8b7648d013d9466791f4eb05e))
+
+Co-authored-by: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+
 ## v0.0.4 (2026-04-10)
 
 ### Bug Fixes
