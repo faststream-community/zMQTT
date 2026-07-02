@@ -30,6 +30,8 @@ from zmqtt._internal.state import (
     SessionState,
     SubscriptionEntry,
 )
+from zmqtt._internal.subscription_index import SubscriptionIndex
+from zmqtt._internal.topic_matching import _filter_specificity
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -50,39 +52,6 @@ def _shared_filter_to_actual(filter_: str) -> str:
         if len(parts) == 3:
             return parts[2]
     return filter_
-
-
-def _topic_matches(actual_filter: str, topic: str) -> bool:
-    """Return True if topic matches the MQTT topic filter (shared prefix already stripped)."""
-    # $-prefixed topics are not matched by wildcards unless filter also starts with $
-    if topic.startswith("$") and not actual_filter.startswith("$"):
-        return False
-    return _match_parts(actual_filter.split("/"), topic.split("/"))
-
-
-def _match_parts(fparts: list[str], tparts: list[str]) -> bool:
-    if not fparts:
-        return not tparts
-    if fparts[0] == "#":
-        return True
-    if not tparts:
-        return False
-    if fparts[0] != "+" and fparts[0] != tparts[0]:
-        return False
-    return _match_parts(fparts[1:], tparts[1:])
-
-
-def _segment_rank(seg: str) -> int:
-    if seg == "#":
-        return 2
-    if seg == "+":
-        return 1
-    return 0
-
-
-def _filter_specificity(actual_filter: str) -> tuple[int, ...]:
-    """Return a sort key for a filter (shared prefix already stripped); lexicographically smaller == more specific."""
-    return tuple(_segment_rank(s) for s in actual_filter.split("/"))
 
 
 class MQTTProtocol:
@@ -113,6 +82,7 @@ class MQTTProtocol:
         self._ping_waiters: list[asyncio.Future[None]] = []
         self._disconnecting = False
         self.started_event = asyncio.Event()
+        self._subscription_index: SubscriptionIndex | None = None
 
     async def connect(self, packet: Connect) -> ConnAck:
         """Send CONNECT, read and return CONNACK. Raises on failure."""
@@ -237,32 +207,41 @@ class MQTTProtocol:
         loop = asyncio.get_running_loop()
         pid = self._state.packet_ids.acquire()
         new_entries: dict[str, SubscriptionEntry] = {}
+        self._subscription_index = self._state.subscription_index
+
         for req in filters:
             f = req.topic_filter
-            if f in self._state.subscriptions:
+            if self._state.subscriptions.find(f):
                 log.warning("Filter %r already subscribed (ignored)", f)
             else:
+                actual_filter = _shared_filter_to_actual(f)
                 new_entries[f] = SubscriptionEntry(
                     queue=asyncio.Queue(),
                     auto_ack=auto_ack,
-                    actual_filter=_shared_filter_to_actual(f),
+                    actual_filter=actual_filter,
                 )
+                self._state.subscription_index.add(actual_filter, new_entries[f])
+
         self._state.subscriptions.update(new_entries)
         future: asyncio.Future[SubAck] = loop.create_future()
         self._state.pending_subs[pid] = future
+
         await self._send(
             self._encode(Subscribe(packet_id=pid, subscriptions=tuple(filters))),
         )
+
         log.debug("Sent SUBSCRIBE", extra={"packet_id": pid})
+
         try:
             suback = await future
         except Exception:
             for f in new_entries:
-                self._state.subscriptions.pop(f, None)
+                self._state.subscriptions.remove(f)
             raise
         finally:
             self._state.pending_subs.pop(pid, None)
             self._state.packet_ids.release(pid)
+
         return suback, {f: entry.queue for f, entry in new_entries.items()}
 
     async def unsubscribe(self, filters: list[str]) -> UnsubAck:
@@ -284,7 +263,7 @@ class MQTTProtocol:
             self._state.pending_unsubs.pop(pid, None)
             self._state.packet_ids.release(pid)
             for f in filters:
-                self._state.subscriptions.pop(f, None)
+                self._state.subscriptions.remove(f)
         return unsuback
 
     async def ping(self, timeout: float | None = None) -> float:
@@ -367,7 +346,7 @@ class MQTTProtocol:
         """
         Return True if the winning subscriptions all have auto_ack=True or none match.
         """
-        matching = [(f, e) for f, e in self._state.subscriptions.items() if _topic_matches(e.actual_filter, topic)]
+        matching = self._state.subscription_index.match(topic)
         if not matching:
             return True
         best_key = min(_filter_specificity(e.actual_filter) for _, e in matching)
@@ -513,8 +492,7 @@ class MQTTProtocol:
         publish: Publish,
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
-        snapshot = list(self._state.subscriptions.items())
-        matching = [(f, e) for f, e in snapshot if _topic_matches(e.actual_filter, publish.topic)]
+        matching = self._state.subscription_index.match(publish.topic)
         if not matching:
             log.warning("No subscriber for topic %r", publish.topic)
             return

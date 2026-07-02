@@ -132,10 +132,13 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
     await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
 
     queue: asyncio.Queue[Message] = asyncio.Queue()
-    protocol._state.subscriptions["t/#"] = SubscriptionEntry(
-        queue=queue,
-        auto_ack=False,
-        actual_filter="t/#",
+    protocol._state.subscriptions.add(
+        "t/#",
+        SubscriptionEntry(
+            queue=queue,
+            auto_ack=False,
+            actual_filter="t/#",
+        ),
     )
     transport.sent.clear()
 

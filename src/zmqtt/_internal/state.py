@@ -6,6 +6,7 @@ from enum import Enum
 
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
 from zmqtt._internal.packets.subscribe import SubAck, UnsubAck
+from zmqtt._internal.subscription_index import SubscriptionIndex
 from zmqtt._internal.types.message import Message
 
 
@@ -70,6 +71,44 @@ class SubscriptionEntry:
     actual_filter: str = ""  # filter with $share/<group>/ stripped; set on creation
 
 
+class SubscriptionRegistry:
+    def __init__(self, index: SubscriptionIndex) -> None:
+        self._items: dict[str, SubscriptionEntry] = {}
+        self._index = index
+
+    def find(self, key: str) -> bool:
+        return key in self._items
+
+    def get(self, key: str, default: SubscriptionEntry | None = None) -> SubscriptionEntry | None:
+        return self._items.get(key, default)
+
+    def add(self, key: str, value: SubscriptionEntry) -> None:
+        existing = self._items.get(key)
+        if existing is not None:
+            self._index.remove(existing.actual_filter, existing)
+        self._items[key] = value
+        self._index.add(value.actual_filter, value)
+
+    def remove(self, key: str) -> SubscriptionEntry | None:
+        value = self._items.pop(key, None)
+        if value is None:
+            return None
+        self._index.remove(value.actual_filter, value)
+        return value
+
+    def clear(self) -> None:
+        for value in self._items.values():
+            self._index.remove(value.actual_filter, value)
+        self._items.clear()
+
+    def update(self, other: dict[str, SubscriptionEntry] | None = None, **kwargs: SubscriptionEntry) -> None:
+        if other is not None:
+            for key, value in other.items():
+                self.add(key, value)
+        for key, value in kwargs.items():
+            self.add(key, value)
+
+
 class SessionState:
     """All mutable per-connection session state. No I/O."""
 
@@ -80,8 +119,9 @@ class SessionState:
         self.inflight_qos2_in: dict[int, InboundQoS2Flight] = {}
         # QoS 2 inbound: packet_ids received but not yet acked (PUBREC not sent)
         self.pending_ack_qos2_in: set[int] = set()
+        self.subscription_index = SubscriptionIndex()
         # topic filter → subscription entry; registered before SUBSCRIBE is sent
-        self.subscriptions: dict[str, SubscriptionEntry] = {}
+        self.subscriptions: SubscriptionRegistry = SubscriptionRegistry(self.subscription_index)
         # pending protocol acks keyed by packet_id
         self.pending_subs: dict[int, asyncio.Future[SubAck]] = {}
         self.pending_unsubs: dict[int, asyncio.Future[UnsubAck]] = {}
@@ -94,5 +134,6 @@ class SessionState:
         self.inflight_qos2_in.clear()
         self.pending_ack_qos2_in.clear()
         self.subscriptions.clear()
+        self.subscription_index.clear()
         self.pending_subs.clear()
         self.pending_unsubs.clear()
