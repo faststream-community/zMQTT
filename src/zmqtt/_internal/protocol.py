@@ -30,7 +30,6 @@ from zmqtt._internal.state import (
     SessionState,
     SubscriptionEntry,
 )
-from zmqtt._internal.subscription_index import SubscriptionIndex
 from zmqtt._internal.topic_matching import _filter_specificity
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
@@ -82,7 +81,6 @@ class MQTTProtocol:
         self._ping_waiters: list[asyncio.Future[None]] = []
         self._disconnecting = False
         self.started_event = asyncio.Event()
-        self._subscription_index: SubscriptionIndex | None = None
 
     async def connect(self, packet: Connect) -> ConnAck:
         """Send CONNECT, read and return CONNACK. Raises on failure."""
@@ -207,11 +205,10 @@ class MQTTProtocol:
         loop = asyncio.get_running_loop()
         pid = self._state.packet_ids.acquire()
         new_entries: dict[str, SubscriptionEntry] = {}
-        self._subscription_index = self._state.subscription_index
 
         for req in filters:
             f = req.topic_filter
-            if self._state.subscriptions.find(f):
+            if self._state.subscriptions.contains(f):
                 log.warning("Filter %r already subscribed (ignored)", f)
             else:
                 actual_filter = _shared_filter_to_actual(f)
@@ -219,6 +216,7 @@ class MQTTProtocol:
                     queue=asyncio.Queue(),
                     auto_ack=auto_ack,
                     actual_filter=actual_filter,
+                    topic_filter=f,
                 )
 
         self._state.subscriptions.update(new_entries)
@@ -345,7 +343,7 @@ class MQTTProtocol:
         """
         Return True if the winning subscriptions all have auto_ack=True or none match.
         """
-        matching = self._state.subscription_index.match(topic)
+        matching = self._state.subscriptions.match(topic)
         if not matching:
             return True
         best_key = min(_filter_specificity(e.actual_filter) for _, e in matching)
@@ -491,7 +489,7 @@ class MQTTProtocol:
         publish: Publish,
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
-        matching = self._state.subscription_index.match(publish.topic)
+        matching = self._state.subscriptions.match(publish.topic)
         if not matching:
             log.warning("No subscriber for topic %r", publish.topic)
             return
