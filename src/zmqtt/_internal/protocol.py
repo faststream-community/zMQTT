@@ -220,7 +220,6 @@ class MQTTProtocol:
                     auto_ack=auto_ack,
                     actual_filter=actual_filter,
                 )
-                self._state.subscription_index.add(actual_filter, new_entries[f])
 
         self._state.subscriptions.update(new_entries)
         future: asyncio.Future[SubAck] = loop.create_future()
