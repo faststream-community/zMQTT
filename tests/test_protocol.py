@@ -14,7 +14,12 @@ import pytest
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.publish import PubAck, Publish
-from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.packets.subscribe import SubAck, SubscriptionRequest
+from zmqtt._internal.protocol import (
+    _DEFAULT_STRIPPED_PREFIXES,
+    MQTTProtocol,
+    _shared_filter_to_actual,
+)
 from zmqtt._internal.state import SessionState, SubscriptionEntry
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -54,6 +59,7 @@ class FakeTransport:
 def make_protocol(
     keepalive: int = 60,
     ping_timeout: float = 5.0,
+    stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
 ) -> tuple[MQTTProtocol, FakeTransport]:
     transport = FakeTransport()
     state = SessionState()
@@ -62,6 +68,7 @@ def make_protocol(
         state,
         keepalive=keepalive,
         ping_timeout=ping_timeout,
+        stripped_prefixes=stripped_prefixes,
     )
     return protocol, transport
 
@@ -141,6 +148,76 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
         )
 
     assert "unknown/topic" in caplog.text
+
+
+async def test_stripped_prefix_filter_receives_messages() -> None:
+    """A group-less decorator ($queue, $exclusive, ...) is stripped for matching.
+
+    The broker delivers on the real topic, so without stripping the prefix every
+    message is dropped with "No subscriber".
+    """
+    protocol, _ = make_protocol()
+    entry = SubscriptionEntry(
+        queue=asyncio.Queue(),
+        actual_filter=_shared_filter_to_actual("$queue/sensors/+/state", _DEFAULT_STRIPPED_PREFIXES),
+    )
+    protocol._state.subscriptions["$queue/sensors/+/state"] = entry
+
+    await protocol._deliver(
+        Publish(
+            topic="sensors/dev-1/state",
+            payload=b"x",
+            qos=QoS.AT_MOST_ONCE,
+            retain=False,
+            dup=False,
+        ),
+        ack_callback=None,
+    )
+
+    assert entry.queue.qsize() == 1
+
+
+def test_shared_prefixes_are_stripped_for_matching() -> None:
+    strip = _DEFAULT_STRIPPED_PREFIXES
+    # $share carries a group; the group-less decorators do not.
+    assert _shared_filter_to_actual("$share/group/a/+/b", strip) == "a/+/b"
+    assert _shared_filter_to_actual("$queue/a/+/b", strip) == "a/+/b"
+    assert _shared_filter_to_actual("$exclusive/a/+/b", strip) == "a/+/b"
+    assert _shared_filter_to_actual("a/+/b", strip) == "a/+/b"
+    # A malformed $share prefix is left as-is rather than guessed at.
+    assert _shared_filter_to_actual("$share/only-group", strip) == "$share/only-group"
+
+
+def test_unknown_prefixes_are_not_stripped() -> None:
+    """The allowlist fails safe: a real namespace or an unconfigured decorator is
+    left untouched (a loud "No subscriber" beats a silent mis-route), until the
+    broker's decorator is added to the allowlist.
+    """
+    strip = _DEFAULT_STRIPPED_PREFIXES
+    assert _shared_filter_to_actual("$SYS/#", strip) == "$SYS/#"
+    assert _shared_filter_to_actual("$q/a/b", strip) == "$q/a/b"
+    assert _shared_filter_to_actual("$q/a/b", ("$q",)) == "a/b"
+
+
+async def test_configured_prefix_reaches_subscribe() -> None:
+    """A prefix added via stripped_prefixes is applied to the stored actual_filter."""
+    protocol, transport = make_protocol(stripped_prefixes=("$q",))
+
+    async def subscribe() -> None:
+        await protocol.subscribe(
+            [SubscriptionRequest(topic_filter="$q/sensors/+/state", qos=QoS.AT_MOST_ONCE)],
+        )
+
+    task = asyncio.create_task(subscribe())
+    await asyncio.sleep(0)
+    transport.feed(encode(SubAck(packet_id=1, return_codes=(0x00,)), version="3.1.1"))
+    read = asyncio.create_task(protocol._read_loop())
+    await task
+    read.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await read
+
+    assert protocol._state.subscriptions["$q/sensors/+/state"].actual_filter == "sensors/+/state"
 
 
 async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
