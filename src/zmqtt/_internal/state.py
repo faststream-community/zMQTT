@@ -68,6 +68,7 @@ class SubscriptionEntry:
     queue: asyncio.Queue[Message]
     auto_ack: bool = True
     actual_filter: str = ""  # filter with $share/<group>/ stripped; set on creation
+    subscription_identifier: int | None = None  # v5; echoed by the broker on PUBLISH
 
 
 class SessionState:

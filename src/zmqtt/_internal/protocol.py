@@ -12,6 +12,7 @@ from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.properties import SubscribeProperties
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import (
@@ -298,6 +299,7 @@ class MQTTProtocol:
         *,
         auto_ack: bool = True,
         queue_maxsize: int = 0,
+        subscription_identifier: int | None = None,
     ) -> tuple[SubAck, dict[str, asyncio.Queue[Message]]]:
         """Send SUBSCRIBE and return (SubAck, {filter: queue}) after broker ACK.
 
@@ -309,6 +311,11 @@ class MQTTProtocol:
         ``_deliver`` blocks, which stalls the read loop and ultimately pushes back
         on the broker through the TCP window — the flow-control chain the docs
         describe. ``0`` keeps the queue unbounded.
+
+        ``subscription_identifier`` (MQTT 5) is sent in the SUBSCRIBE properties;
+        the broker echoes it on every PUBLISH this subscription causes, which lets
+        ``_deliver`` attribute the message to the exact subscription that matched
+        instead of guessing by filter specificity.
         """
         self._ensure_alive()
         loop = asyncio.get_running_loop()
@@ -323,12 +330,20 @@ class MQTTProtocol:
                     queue=asyncio.Queue(queue_maxsize),
                     auto_ack=auto_ack,
                     actual_filter=_shared_filter_to_actual(f, self._stripped_prefixes),
+                    subscription_identifier=subscription_identifier,
                 )
         self._state.subscriptions.update(new_entries)
         future: asyncio.Future[SubAck] = loop.create_future()
         self._state.pending_subs[pid] = future
+        properties = (
+            SubscribeProperties(subscription_identifier=subscription_identifier)
+            if subscription_identifier is not None
+            else None
+        )
         await self._send(
-            self._encode(Subscribe(packet_id=pid, subscriptions=tuple(filters))),
+            self._encode(
+                Subscribe(packet_id=pid, subscriptions=tuple(filters), properties=properties),
+            ),
         )
         log.debug("Sent SUBSCRIBE", extra={"packet_id": pid})
         try:
@@ -596,6 +611,22 @@ class MQTTProtocol:
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
         snapshot = list(self._state.subscriptions.items())
+
+        # MQTT 5: the broker names the subscription that matched — exact where the
+        # filter-specificity guess below cannot tell overlapping filters apart
+        # (e.g. a $share subscription and its plain twin).
+        echoed = publish.properties.subscription_identifier if publish.properties else None
+        if echoed is not None:
+            identified = [(f, e) for f, e in snapshot if e.subscription_identifier == echoed]
+            if identified:
+                await self._put_message(publish, identified, ack_callback)
+                return
+            log.warning(
+                "No subscription with identifier %r for topic %r, falling back to filter matching",
+                echoed,
+                publish.topic,
+            )
+
         matching = [(f, e) for f, e in snapshot if _topic_matches(e.actual_filter, publish.topic)]
         if not matching:
             log.warning("No subscriber for topic %r", publish.topic)
@@ -609,18 +640,26 @@ class MQTTProtocol:
                 [f for f, _ in winners],
             )
             winners = winners[:1]
-        filter_, entry = winners[0]
-        msg = Message(
-            topic=publish.topic,
-            payload=publish.payload,
-            qos=publish.qos,
-            retain=publish.retain,
-            properties=publish.properties,
-        )
-        if not entry.auto_ack and ack_callback is not None:
-            msg._ack_callback = ack_callback
-        await entry.queue.put(msg)
-        log.debug(
-            "Delivered message",
-            extra={"topic": publish.topic, "filter": filter_},
-        )
+        await self._put_message(publish, winners[:1], ack_callback)
+
+    async def _put_message(
+        self,
+        publish: Publish,
+        recipients: list[tuple[str, SubscriptionEntry]],
+        ack_callback: Callable[[], Awaitable[None]] | None,
+    ) -> None:
+        for filter_, entry in recipients:
+            msg = Message(
+                topic=publish.topic,
+                payload=publish.payload,
+                qos=publish.qos,
+                retain=publish.retain,
+                properties=publish.properties,
+            )
+            if not entry.auto_ack and ack_callback is not None:
+                msg._ack_callback = ack_callback
+            await entry.queue.put(msg)
+            log.debug(
+                "Delivered message",
+                extra={"topic": publish.topic, "filter": filter_},
+            )

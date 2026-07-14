@@ -42,6 +42,9 @@ __all__ = (
 
 TransportFactory = Callable[[str, int, ssl.SSLContext | bool | None], Awaitable[Transport]]
 
+# MQTT 5.0 §3.8.2.1.2: a subscription identifier is a variable-byte integer.
+_MAX_SUBSCRIPTION_IDENTIFIER = 268_435_455
+
 log = logging.getLogger(__name__)
 
 
@@ -169,6 +172,7 @@ class Subscription:
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        subscription_identifier: int | None = None,
     ) -> None:
         self._client = client
         self._filters = filters
@@ -178,6 +182,7 @@ class Subscription:
         self._relay_tasks: list[asyncio.Task[None]] = []
         self._no_local = no_local
         self._retain_as_published = retain_as_published
+        self._subscription_identifier = subscription_identifier
         self._registered_filters: list[str] = []
 
     async def __aenter__(self) -> Self:
@@ -216,6 +221,7 @@ class Subscription:
             reqs,
             auto_ack=self._auto_ack,
             queue_maxsize=self._queue.maxsize,
+            subscription_identifier=self._subscription_identifier,
         )
         self._registered_filters = list(queues.keys())
         for q in queues.values():
@@ -486,6 +492,7 @@ class MQTTClient:
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        subscription_identifier: int | None = None,
     ) -> Subscription:
         """Create a :class:`Subscription` for one or more topic filters.
 
@@ -510,6 +517,12 @@ class MQTTClient:
                 only).
             retain_as_published: Preserve the retain flag on forwarded messages
                 (MQTT 5.0 only).
+            subscription_identifier: Numeric identifier (1..268435455) sent in the
+                SUBSCRIBE properties (MQTT 5.0 only). The broker echoes it on every
+                PUBLISH this subscription causes: incoming messages are routed to
+                the exact subscription that matched (essential when filters
+                overlap, e.g. a ``$share/...`` subscription plus its plain twin),
+                and the value is readable on ``Message.properties``.
 
         Raises:
             MQTTInvalidTopicError: If any filter is empty, has ``$`` in a non-leading
@@ -523,6 +536,13 @@ class MQTTClient:
         if (no_local or retain_as_published) and self._version != "5.0":
             msg = "no_local and retain_as_published require MQTT 5.0"
             raise RuntimeError(msg)
+        if subscription_identifier is not None:
+            if self._version != "5.0":
+                msg = "subscription_identifier requires MQTT 5.0"
+                raise RuntimeError(msg)
+            if not 1 <= subscription_identifier <= _MAX_SUBSCRIPTION_IDENTIFIER:
+                msg = "subscription_identifier must be in 1..268435455"
+                raise ValueError(msg)
         return Subscription(
             self,
             list(filters),
@@ -531,6 +551,7 @@ class MQTTClient:
             receive_buffer_size,
             no_local,
             retain_as_published,
+            subscription_identifier,
         )
 
     async def request(
