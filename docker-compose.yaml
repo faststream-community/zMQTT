@@ -30,3 +30,10 @@ services:
       - "1887:1883"
     security_opt:
       - no-new-privileges:true
+
+  emqx:
+    image: emqx/emqx@sha256:0ba29902a8e552f7152754860b4b61b49a7e16fa376035bcf10021e944b2c0a0 # 6.2.2
+    ports:
+      - 1888:1883
+    security_opt:
+      - no-new-privileges:true
