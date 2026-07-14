@@ -114,6 +114,7 @@ class MQTTProtocol:
         self._buf = PacketBuffer(version=version)
         self._ping_waiters: list[asyncio.Future[None]] = []
         self._disconnecting = False
+        self._dead = False
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
@@ -163,6 +164,7 @@ class MQTTProtocol:
             raise
         finally:
             self.started_event.clear()
+            self._dead = True
             self._cancel_pending()
 
     async def disconnect(self) -> None:
@@ -193,10 +195,23 @@ class MQTTProtocol:
                 ping_f.set_exception(exc)
         self._ping_waiters.clear()
 
+    def _ensure_alive(self) -> None:
+        """Refuse new operations once the run loop has exited.
+
+        _cancel_pending() fails every future that existed when the loop died, but
+        an operation started afterwards would create a fresh future that nothing
+        will ever resolve — the caller would hang forever (a dead client used to
+        hang even in __aexit__, inside unsubscribe()).
+        """
+        if self._dead:
+            msg = "Connection lost"
+            raise MQTTDisconnectedError(msg)
+
     async def publish(self, packet: Publish) -> PubAck | PubComp | None:
         """
         Publish a message. Returns PubAck (QoS 1), PubComp (QoS 2), or None (QoS 0).
         """
+        self._ensure_alive()
         match packet.qos:
             case QoS.AT_MOST_ONCE:
                 await self._send(self._encode(packet))
@@ -250,6 +265,7 @@ class MQTTProtocol:
         Duplicate filters (already subscribed) are logged as warnings and skipped;
         they are still included in the SUBSCRIBE packet sent to the broker.
         """
+        self._ensure_alive()
         loop = asyncio.get_running_loop()
         pid = self._state.packet_ids.acquire()
         new_entries: dict[str, SubscriptionEntry] = {}
@@ -283,6 +299,7 @@ class MQTTProtocol:
 
     async def unsubscribe(self, filters: list[str]) -> UnsubAck:
         """Send UNSUBSCRIBE, remove queues from state, return UnsubAck."""
+        self._ensure_alive()
         pid = self._state.packet_ids.acquire()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[UnsubAck] = loop.create_future()
@@ -365,9 +382,12 @@ class MQTTProtocol:
                 await self._handle_unsuback(packet)
             case PingResp():
                 self._handle_pingresp()
-            case Disconnect():
-                msg = "Broker sent DISCONNECT unexpectedly"
-                raise MQTTProtocolError(msg)
+            case Disconnect(reason_code=reason_code):
+                # A broker-initiated DISCONNECT (session takeover, keepalive timeout,
+                # admin kick) is a disconnection, not a protocol violation — raise it
+                # as MQTTDisconnectedError so it takes the reconnect path.
+                msg = f"Broker sent DISCONNECT (reason code 0x{reason_code:02X})"
+                raise MQTTDisconnectedError(msg)
             case Auth():
                 if self._version != "5.0":
                     msg = "Received AUTH packet in MQTT 3.1.1 session"
