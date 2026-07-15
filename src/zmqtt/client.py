@@ -10,9 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, overload
 
-from typing_extensions import Self
-
-from zmqtt._internal._compat import defer_cancellation
+from zmqtt._internal._compat import Self, defer_cancellation
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.connect import Connect
 from zmqtt._internal.packets.properties import (
