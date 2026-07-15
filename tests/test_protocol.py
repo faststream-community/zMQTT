@@ -13,12 +13,14 @@ import pytest
 
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
+from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.publish import PubAck, Publish
+from zmqtt._internal.packets.subscribe import SubscriptionRequest
 from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.state import SessionState, SubscriptionEntry
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
-from zmqtt.errors import MQTTConnectError, MQTTProtocolError, MQTTTimeoutError
+from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTProtocolError, MQTTTimeoutError
 
 
 class FakeTransport:
@@ -141,6 +143,40 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
         )
 
     assert "unknown/topic" in caplog.text
+
+
+async def test_broker_disconnect_is_a_disconnection() -> None:
+    """A broker-initiated DISCONNECT must take the reconnect path.
+
+    Brokers send it on session takeover (same client id — every rolling deploy),
+    keepalive timeout, admin kick and rate limiting. Raised as a protocol error it
+    killed the run task silently: iterators hung forever and nothing reconnected.
+    """
+    protocol, transport = make_protocol()
+
+    transport.feed(encode(Disconnect(reason_code=0x8E), version="3.1.1"))
+
+    with pytest.raises(MQTTDisconnectedError):
+        await asyncio.wait_for(protocol._read_loop(), timeout=1)
+
+
+async def test_dead_protocol_refuses_new_operations() -> None:
+    """Operations after the run loop died must fail fast, not hang.
+
+    _cancel_pending() fails futures that already exist; an unsubscribe() issued
+    afterwards (e.g. Subscription.__aexit__ on a dead client) used to create a
+    fresh future that nothing would ever resolve.
+    """
+    protocol, _ = make_protocol()
+    protocol._dead = True
+
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.unsubscribe(["a/b"])
+
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.subscribe(
+            [SubscriptionRequest(topic_filter="a/b", qos=QoS.AT_MOST_ONCE)],
+        )
 
 
 async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
