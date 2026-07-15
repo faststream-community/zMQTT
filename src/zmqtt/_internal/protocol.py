@@ -37,6 +37,7 @@ from zmqtt.errors import (
     MQTTConnectError,
     MQTTDisconnectedError,
     MQTTProtocolError,
+    MQTTSubscribeError,
     MQTTTimeoutError,
 )
 
@@ -83,6 +84,20 @@ def _segment_rank(seg: str) -> int:
 def _filter_specificity(actual_filter: str) -> tuple[int, ...]:
     """Return a sort key for a filter (shared prefix already stripped); lexicographically smaller == more specific."""
     return tuple(_segment_rank(s) for s in actual_filter.split("/"))
+
+
+def _raise_on_rejected_filters(filters: list[SubscriptionRequest], suback: SubAck) -> None:
+    """Surface SUBACK failure codes (>= 0x80) instead of ignoring them.
+
+    A rejected filter — most commonly an authorization denial — otherwise looks
+    exactly like a successful subscription and silently never receives anything.
+    Return codes map to filters by position (MQTT 3.1.1 §3.9.3, 5.0 §3.9.2.1).
+    """
+    # strict=False: a non-conforming broker answering with a short code list
+    # should not turn into a ValueError here.
+    failures = {req.topic_filter: code for req, code in zip(filters, suback.return_codes, strict=False) if code >= 0x80}
+    if failures:
+        raise MQTTSubscribeError(failures)
 
 
 class MQTTProtocol:
@@ -272,6 +287,7 @@ class MQTTProtocol:
         log.debug("Sent SUBSCRIBE", extra={"packet_id": pid})
         try:
             suback = await future
+            _raise_on_rejected_filters(filters, suback)
         except Exception:
             for f in new_entries:
                 self._state.subscriptions.pop(f, None)
