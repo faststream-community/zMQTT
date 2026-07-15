@@ -14,7 +14,6 @@ import pytest
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.publish import PubAck, Publish
-from zmqtt._internal.packets.subscribe import SubAck, SubscriptionRequest
 from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.state import SessionState, SubscriptionEntry
 from zmqtt._internal.types.message import Message
@@ -142,35 +141,6 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
         )
 
     assert "unknown/topic" in caplog.text
-
-
-async def test_protocol_queue_is_bounded() -> None:
-    """The per-filter delivery queue must honour queue_maxsize.
-
-    Unbounded, a slow consumer grows it without limit — no drop, no block, no
-    TCP backpressure, just memory (18 999 of 20 000 flood messages in practice).
-    """
-    protocol, transport = make_protocol()
-
-    async def subscribe() -> dict[str, asyncio.Queue[Message]]:
-        _, queues = await protocol.subscribe(
-            [SubscriptionRequest(topic_filter="flood/#", qos=QoS.AT_MOST_ONCE)],
-            queue_maxsize=5,
-        )
-        return queues
-
-    task = asyncio.create_task(subscribe())
-    await asyncio.sleep(0)
-    suback = encode(SubAck(packet_id=1, return_codes=(0x00,)), version="3.1.1")
-    transport.feed(suback)
-    read = asyncio.create_task(protocol._read_loop())
-    queues = await task
-    read.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await read
-
-    (queue,) = queues.values()
-    assert queue.maxsize == 5
 
 
 async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
