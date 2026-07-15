@@ -48,6 +48,13 @@ jobs:
         options: >-
           --security-opt no-new-privileges:true
 
+      emqx:
+        image: emqx/emqx@sha256:0ba29902a8e552f7152754860b4b61b49a7e16fa376035bcf10021e944b2c0a0  # 6.2.2
+        ports:
+          - 1888:1883
+        options: >-
+          --security-opt no-new-privileges:true
+
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
@@ -74,7 +81,7 @@ jobs:
           sleep 15
 
           # Test connections to brokers
-          for port in 1883 1884 1886 1887; do
+          for port in 1883 1884 1886 1887 1888; do
             nc -zv localhost $port || echo "Port $port not responding"
           done
 
@@ -114,7 +121,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
-      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py
+      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
       - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
           files: coverage.xml
@@ -144,7 +151,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --group dev
-      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py
+      - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
       - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
           files: coverage.xml
