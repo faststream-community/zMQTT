@@ -95,11 +95,7 @@ def _raise_on_rejected_filters(filters: list[SubscriptionRequest], suback: SubAc
     """
     # strict=False: a non-conforming broker answering with a short code list
     # should not turn into a ValueError here.
-    failures = {
-        req.topic_filter: code
-        for req, code in zip(filters, suback.return_codes, strict=False)
-        if code >= 0x80
-    }
+    failures = {req.topic_filter: code for req, code in zip(filters, suback.return_codes, strict=False) if code >= 0x80}
     if failures:
         raise MQTTSubscribeError(failures)
 
