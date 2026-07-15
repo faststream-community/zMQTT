@@ -1,6 +1,10 @@
+import asyncio
+
 import pytest
 
-from zmqtt._internal.protocol import _filter_specificity, _topic_matches
+from zmqtt._internal.state import SubscriptionEntry
+from zmqtt._internal.subscription_index import SubscriptionIndex
+from zmqtt._internal.topic_matching import _filter_specificity, _topic_matches
 
 
 @pytest.mark.parametrize(
@@ -45,3 +49,28 @@ def test_filter_specificity_hash() -> None:
 
 def test_filter_specificity_bare_hash() -> None:
     assert _filter_specificity("#") == (2,)
+
+
+def test_subscription_index_returns_best_match() -> None:
+    index = SubscriptionIndex()
+    index.add("#", SubscriptionEntry(queue=asyncio.Queue(), actual_filter="#"))
+    index.add("sensors/#", SubscriptionEntry(queue=asyncio.Queue(), actual_filter="sensors/#"))
+    index.add("sensors/room/temp", SubscriptionEntry(queue=asyncio.Queue(), actual_filter="sensors/room/temp"))
+
+    matches = index.match("sensors/room/temp")
+
+    assert {match[0] for match in matches} == {"#", "sensors/#", "sensors/room/temp"}
+    best_match = index.best("sensors/room/temp")
+    assert best_match is not None
+    assert best_match[0] == "sensors/room/temp"
+
+
+def test_subscription_index_removes_filters() -> None:
+    index = SubscriptionIndex()
+    entry = SubscriptionEntry(queue=asyncio.Queue(), actual_filter="sensors/#")
+    index.add("sensors/#", entry)
+
+    index.remove("sensors/#")
+
+    assert index.match("sensors/temp") == []
+    assert index.best("sensors/temp") is None

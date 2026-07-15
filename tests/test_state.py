@@ -125,7 +125,8 @@ def test_session_state_starts_empty() -> None:
     assert state.inflight_qos1 == {}
     assert state.inflight_qos2_out == {}
     assert state.inflight_qos2_in == {}
-    assert state.subscriptions == {}
+    assert state.subscriptions.match("any/topic") == []
+    assert state.subscriptions.contains("test/#") is False
     assert state.pending_subs == {}
     assert state.pending_unsubs == {}
 
@@ -134,9 +135,10 @@ def test_session_state_clear() -> None:
     state = SessionState()
     state.packet_ids.acquire()
     state.inflight_qos1[1] = None  # type: ignore[assignment]
-    state.subscriptions["test/#"] = SubscriptionEntry(queue=asyncio.Queue())
+    state.subscriptions.add("test/#", SubscriptionEntry(queue=asyncio.Queue()))
     state.clear()
     assert state.inflight_qos1 == {}
-    assert state.subscriptions == {}
+    assert state.subscriptions.match("any/topic") == []
+    assert state.subscriptions.contains("test/#") is False
     # packet_ids reset
     assert state.packet_ids.acquire() == 1

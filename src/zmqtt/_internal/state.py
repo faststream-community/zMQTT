@@ -6,6 +6,7 @@ from enum import Enum
 
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
 from zmqtt._internal.packets.subscribe import SubAck, UnsubAck
+from zmqtt._internal.subscription_index import SubscriptionIndex
 from zmqtt._internal.types.message import Message
 
 
@@ -68,6 +69,7 @@ class SubscriptionEntry:
     queue: asyncio.Queue[Message]
     auto_ack: bool = True
     actual_filter: str = ""  # filter with $share/<group>/ stripped; set on creation
+    topic_filter: str = ""  # original filter requested by the caller
 
 
 class SessionState:
@@ -80,8 +82,8 @@ class SessionState:
         self.inflight_qos2_in: dict[int, InboundQoS2Flight] = {}
         # QoS 2 inbound: packet_ids received but not yet acked (PUBREC not sent)
         self.pending_ack_qos2_in: set[int] = set()
+        self.subscriptions = SubscriptionIndex()
         # topic filter → subscription entry; registered before SUBSCRIBE is sent
-        self.subscriptions: dict[str, SubscriptionEntry] = {}
         # pending protocol acks keyed by packet_id
         self.pending_subs: dict[int, asyncio.Future[SubAck]] = {}
         self.pending_unsubs: dict[int, asyncio.Future[UnsubAck]] = {}
@@ -93,6 +95,5 @@ class SessionState:
         self.inflight_qos2_out.clear()
         self.inflight_qos2_in.clear()
         self.pending_ack_qos2_in.clear()
-        self.subscriptions.clear()
         self.pending_subs.clear()
         self.pending_unsubs.clear()
