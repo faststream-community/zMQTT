@@ -188,6 +188,41 @@ async def test_subscription_identifier_routes_delivery() -> None:
     assert plain.queue.qsize() == 1
 
 
+async def test_multi_filter_subscription_delivers_once_per_publish() -> None:
+    """One subscribe() with MANY filters is ONE subscription: one identifier, one
+    per-filter entry (each with its own relay queue, all draining into the same
+    application queue). A broker PUBLISH echoing that identifier used to be
+    enqueued once PER ENTRY — 20 filters meant 20 duplicates of every message
+    (found live: a device ack recorded 20 times per command). It must land in
+    exactly ONE entry: the one whose filter matches the topic."""
+    protocol, _ = make_protocol()
+    filters = ["demo/+/server/state", "demo/+/server/status", "demo/+/server/state/ack"]
+    entries = {}
+    for topic_filter in filters:
+        entry = SubscriptionEntry(
+            queue=asyncio.Queue(),
+            actual_filter=topic_filter,
+            subscription_identifier=1,
+        )
+        entries[topic_filter] = entry
+        protocol._state.subscriptions[f"$share/g/{topic_filter}"] = entry
+
+    await protocol._deliver(
+        Publish(
+            topic="demo/dev-1/server/state/ack",
+            payload=b"x",
+            qos=QoS.AT_MOST_ONCE,
+            retain=False,
+            dup=False,
+            properties=PublishProperties(subscription_identifier=1),
+        ),
+        ack_callback=None,
+    )
+    sizes = {f: e.queue.qsize() for f, e in entries.items()}
+    assert sum(sizes.values()) == 1  # once per subscription, not once per filter
+    assert sizes["demo/+/server/state/ack"] == 1  # and via the filter that matched
+
+
 async def test_subscribe_sends_identifier_in_properties() -> None:
     """The identifier must actually go out on the wire in the SUBSCRIBE packet."""
     protocol, transport = make_protocol(version="5.0")
