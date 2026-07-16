@@ -267,12 +267,18 @@ class MQTTProtocol:
         filters: list[SubscriptionRequest],
         *,
         auto_ack: bool = True,
+        queue_maxsize: int = 0,
     ) -> tuple[SubAck, dict[str, asyncio.Queue[Message]]]:
         """Send SUBSCRIBE and return (SubAck, {filter: queue}) after broker ACK.
 
         Queues are registered before SUBSCRIBE is sent so no messages are lost.
         Duplicate filters (already subscribed) are logged as warnings and skipped;
         they are still included in the SUBSCRIBE packet sent to the broker.
+
+        ``queue_maxsize`` bounds the per-filter delivery queue. When it is full,
+        ``_deliver`` blocks, which stalls the read loop and ultimately pushes back
+        on the broker through the TCP window — the flow-control chain the docs
+        describe. ``0`` keeps the queue unbounded.
         """
         loop = asyncio.get_running_loop()
         pid = self._state.packet_ids.acquire()
@@ -283,7 +289,7 @@ class MQTTProtocol:
                 log.warning("Filter %r already subscribed (ignored)", f)
             else:
                 new_entries[f] = SubscriptionEntry(
-                    queue=asyncio.Queue(),
+                    queue=asyncio.Queue(queue_maxsize),
                     auto_ack=auto_ack,
                     actual_filter=_shared_filter_to_actual(f, self._stripped_prefixes),
                 )

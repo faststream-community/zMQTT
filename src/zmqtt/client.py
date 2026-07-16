@@ -212,7 +212,11 @@ class Subscription:
             )
             for f in self._filters
         ]
-        _, queues = await protocol.subscribe(reqs, auto_ack=self._auto_ack)
+        _, queues = await protocol.subscribe(
+            reqs,
+            auto_ack=self._auto_ack,
+            queue_maxsize=self._queue.maxsize,
+        )
         self._registered_filters = list(queues.keys())
         for q in queues.values():
             task: asyncio.Task[None] = asyncio.create_task(self._relay_loop(q))
@@ -498,8 +502,10 @@ class MQTTClient:
             qos: Maximum QoS level requested from the broker.
             auto_ack: Automatically send PUBACK/PUBREC upon receipt. Set to
                 ``False`` to acknowledge manually via :meth:`Message.ack`.
-            receive_buffer_size: Maximum messages buffered in the internal queue.
-                Older messages are dropped when the queue is full.
+            receive_buffer_size: Maximum messages buffered per internal queue.
+                When the buffers are full the read loop stops pulling from the
+                socket, so a slow consumer pushes back on the broker through the
+                TCP window instead of growing memory.
             no_local: Do not receive messages published by this client (MQTT 5.0
                 only).
             retain_as_published: Preserve the retain flag on forwarded messages
