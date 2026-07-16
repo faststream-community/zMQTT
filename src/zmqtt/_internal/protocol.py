@@ -43,12 +43,34 @@ from zmqtt.errors import (
 log = logging.getLogger(__name__)
 
 
-def _shared_filter_to_actual(filter_: str) -> str:
-    """Strip the $share/<group>/ prefix from a shared subscription filter."""
+# Group-less decorator prefixes the broker strips before delivery (unlike $SYS,
+# which it delivers on as-is). Extend via MQTTClient(stripped_prefixes=...).
+_DEFAULT_STRIPPED_PREFIXES: Final = ("$queue", "$exclusive")
+
+
+def _shared_filter_to_actual(filter_: str, stripped_prefixes: tuple[str, ...]) -> str:
+    """Return the filter the broker matches incoming PUBLISH topics against.
+
+    A shared/decorator subscription is sent with a prefix the broker strips before
+    delivery, so matching must run against the filter *without* it:
+
+    - ``$share/<group>/<filter>`` — MQTT 5 shared subscription (the only form that
+      carries a group), handled here directly;
+    - each entry in ``stripped_prefixes`` — a group-less decorator such as
+      ``$queue/<filter>`` or ``$exclusive/<filter>``.
+
+    Anything else — a plain filter, or a real namespace like ``$SYS/#`` the broker
+    delivers on unchanged — is returned untouched. The allowlist fails safe: an
+    unrecognised prefix is left as-is, so a mismatch surfaces as a loud
+    "No subscriber" rather than a silent mis-route.
+    """
     if filter_.startswith("$share/"):
         parts = filter_.split("/", 2)
         if len(parts) == 3:
             return parts[2]
+    for prefix in stripped_prefixes:
+        if filter_.startswith(f"{prefix}/"):
+            return filter_.split("/", 1)[1]
     return filter_
 
 
@@ -104,6 +126,7 @@ class MQTTProtocol:
         ping_timeout: float = 10.0,
         connect_timeout: float = 30.0,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
+        stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
     ) -> None:
         self._transport = transport
         self._state = state
@@ -111,6 +134,7 @@ class MQTTProtocol:
         self._ping_timeout = ping_timeout
         self._connect_timeout = connect_timeout
         self._version: Final = version
+        self._stripped_prefixes = stripped_prefixes
         self._buf = PacketBuffer(version=version)
         self._ping_waiters: list[asyncio.Future[None]] = []
         self._disconnecting = False
@@ -261,7 +285,7 @@ class MQTTProtocol:
                 new_entries[f] = SubscriptionEntry(
                     queue=asyncio.Queue(),
                     auto_ack=auto_ack,
-                    actual_filter=_shared_filter_to_actual(f),
+                    actual_filter=_shared_filter_to_actual(f, self._stripped_prefixes),
                 )
         self._state.subscriptions.update(new_entries)
         future: asyncio.Future[SubAck] = loop.create_future()

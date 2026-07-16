@@ -20,7 +20,7 @@ from zmqtt._internal.packets.properties import (
 )
 from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.subscribe import SubscriptionRequest
-from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.protocol import _DEFAULT_STRIPPED_PREFIXES, MQTTProtocol
 from zmqtt._internal.state import SessionState
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
@@ -302,6 +302,7 @@ class MQTTClient:
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
+        stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
     ) -> None:
         """Create an MQTT client.
 
@@ -337,6 +338,12 @@ class MQTTClient:
                 ``"5.0"``.
             session_expiry_interval: MQTT 5.0 session expiry interval in seconds.
                 ``0`` means the session expires on disconnect.
+            stripped_prefixes: Group-less subscription prefixes the broker strips
+                before delivery — matched against incoming PUBLISH topics with the
+                prefix removed. Defaults to ``("$queue", "$exclusive")``; add a
+                broker-specific decorator here instead of patching the library.
+                ``$share/<group>/`` is always handled; real namespaces the broker
+                delivers on unchanged (e.g. ``$SYS``) must not be listed.
         """
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
@@ -354,6 +361,7 @@ class MQTTClient:
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
         self._session_expiry_interval = session_expiry_interval
+        self._stripped_prefixes = stripped_prefixes
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
         self._run_task: asyncio.Task[None] | None = None
@@ -618,6 +626,7 @@ class MQTTClient:
             keepalive=self._keepalive,
             connect_timeout=self._mqtt_connect_timeout,
             version=self._version,
+            stripped_prefixes=self._stripped_prefixes,
         )
         connect_props = None
         if self._version == "5.0":
