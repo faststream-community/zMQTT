@@ -149,6 +149,42 @@ class BrokerTestBase(abc.ABC):
             task1.cancel()
             task2.cancel()
 
+    async def test_subscription_identifier_overlapping(self, topic: str) -> None:
+        """MQTT 5 subscription identifiers route overlapping subscriptions: a
+        ``$share`` subscription (id 1) and its plain twin (id 2) on the same
+        topic are indistinguishable by client-side filter matching alone — the
+        broker's echoed identifier tags each delivery with the subscription
+        that caused it, so each receives its own copy.
+
+        On 3.1.1 the parameter itself must refuse loudly (v5-only feature).
+        """
+        bare_topic = topic.lstrip("/")
+        group = f"zmqtt-si-{uuid.uuid4().hex[:8]}"
+
+        async with MQTTClient(self.host, self.port, version=self.version) as client:
+            if self.version != "5.0":
+                with pytest.raises(RuntimeError, match=r"requires MQTT 5\.0"):
+                    client.subscribe(bare_topic, qos=QoS.AT_LEAST_ONCE, subscription_identifier=1)
+                return
+
+            async with (
+                client.subscribe(
+                    f"$share/{group}/{bare_topic}",
+                    qos=QoS.AT_LEAST_ONCE,
+                    subscription_identifier=1,
+                ) as shared,
+                client.subscribe(bare_topic, qos=QoS.AT_LEAST_ONCE, subscription_identifier=2) as plain,
+                MQTTClient(self.host, self.port, version=self.version) as publisher,
+            ):
+                for i in range(3):
+                    await publisher.publish(bare_topic, f"m{i}".encode(), qos=QoS.AT_LEAST_ONCE)
+
+                shared_msgs = [await asyncio.wait_for(shared.get_message(), timeout=5.0) for _ in range(3)]
+                plain_msgs = [await asyncio.wait_for(plain.get_message(), timeout=5.0) for _ in range(3)]
+
+        assert {m.properties.subscription_identifier for m in shared_msgs if m.properties} == {1}
+        assert {m.properties.subscription_identifier for m in plain_msgs if m.properties} == {2}
+
     async def test_reconnect_subscription_survives(self, topic: str) -> None:
         reconnect = ReconnectConfig(enabled=True, initial_delay=0.1, max_delay=1.0)
 
