@@ -1,0 +1,28 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      prefix-development: build
+      include: scope
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10

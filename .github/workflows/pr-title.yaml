@@ -1,0 +1,34 @@
+name: PR title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  merge_group:
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  title:
+    name: Conventional PR title
+    runs-on: ubuntu-latest
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+    steps:
+      - name: Validate title
+        shell: bash
+        run: |
+          if [[ "$EVENT_NAME" == "merge_group" ]]; then
+            exit 0
+          fi
+
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9][a-z0-9._/-]*\))?(!)?: .+$'
+          if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+            echo "::error::PR title must follow Conventional Commits, for example: feat(client): add reconnect timeout"
+            exit 1
+          fi
