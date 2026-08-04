@@ -43,8 +43,7 @@ Set it to `0` (unbounded) when:
 MQTT 5.0 request routing has a separate bound. `max_pending_requests` defaults
 to `1000` and limits how many `request()` futures can be registered at once.
 Calls above the limit wait before publishing, applying backpressure to the
-caller. Unmatched and late responses are never buffered by the request
-dispatcher.
+caller. Unmatched and late responses are never buffered.
 
 !!! warning
     Applying backpressure affects all topics multiplexed on the same TCP connection. A slow consumer on one `Subscription` will stall delivery to all other subscriptions on the same client. If you need independent flow control per topic, use separate clients.

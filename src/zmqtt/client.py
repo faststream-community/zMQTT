@@ -609,7 +609,8 @@ class MQTTClient:
         Raises:
             RuntimeError: If the client is not using MQTT 5.0.
             MQTTInvalidTopicError: If ``properties.response_topic`` contains wildcards.
-            MQTTDisconnectedError: If the connection is lost while waiting.
+            MQTTDisconnectedError: If the request cannot start because the client
+                is disconnected, or the client is stopped while waiting.
             ValueError: If the same response topic and correlation data are
                 already used by another active request.
             asyncio.TimeoutError: If no matching reply arrives within *timeout*

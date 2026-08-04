@@ -8,6 +8,7 @@ MQTTError
   ├── MQTTProtocolError     # malformed or unexpected packet
   ├── MQTTDisconnectedError # connection lost unexpectedly
   ├── MQTTTimeoutError      # ping or operation timed out
+  ├── MQTTSubscribeError    # one or more filters rejected by the broker
   └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
 
@@ -20,6 +21,7 @@ from zmqtt import (
     MQTTProtocolError,
     MQTTDisconnectedError,
     MQTTTimeoutError,
+    MQTTSubscribeError,
     MQTTInvalidTopicError,
 )
 ```
@@ -50,15 +52,32 @@ Common return codes (MQTT 3.1.1):
 | 4 | Bad username or password |
 | 5 | Not authorised |
 
+### `MQTTSubscribeError`
+
+Raised when the broker rejects one or more topic filters in its SUBACK response. This commonly indicates an authorization failure. The `failures` attribute maps each rejected filter to its numeric reason code:
+
+```python
+from zmqtt import MQTTSubscribeError
+
+try:
+    async with client.subscribe("private/#") as sub:
+        ...
+except MQTTSubscribeError as e:
+    for topic_filter, reason_code in e.failures.items():
+        print(f"{topic_filter!r} rejected: 0x{reason_code:02X}")
+```
+
+The same exception is raised by `await sub.start()` when using the manual subscription lifecycle.
+
 ### `MQTTProtocolError`
 
 Raised when the broker sends a packet that violates the MQTT spec — wrong packet type in context, malformed header, etc. This usually indicates a broker bug or a mismatch between library version and broker behaviour.
 
 ### `MQTTDisconnectedError`
 
-Raised when the TCP connection drops unexpectedly (network failure, broker restart, etc.). If reconnection is enabled (the default), this error is caught internally and the client reconnects automatically — your application code never sees it.
+Raised when an operation cannot continue because the connection was lost. If reconnection is enabled (the default), transient connection failures are normally handled automatically.
 
-If reconnection is disabled (`ReconnectConfig(enabled=False)`), `MQTTDisconnectedError` propagates out of `publish()`, `subscribe()`, `ping()`, and through the context manager body.
+If reconnection is disabled (`ReconnectConfig(enabled=False)`), an in-progress or subsequent `publish()`, `ping()`, or subscription start may raise `MQTTDisconnectedError`. The exception is not injected asynchronously into unrelated application code.
 
 ### `MQTTTimeoutError`
 
@@ -137,24 +156,11 @@ See [Request / Response](advanced/request-response.md) for details.
 
 ## Reconnection interaction
 
-When `ReconnectConfig(enabled=True)` (the default), `MQTTDisconnectedError` and `MQTTTimeoutError` inside the protocol loop are suppressed and the client reconnects with exponential backoff. Your `async for msg in sub` loop keeps waiting — it will resume delivering messages once the connection is restored.
+When `ReconnectConfig(enabled=True)` (the default), the client reconnects with exponential backoff. An active `async for msg in sub` loop keeps waiting and resumes after the subscription is restored.
 
-When reconnection is disabled, the exception propagates out of the client context manager's `__aexit__` as an `ExceptionGroup` (Python 3.11+ TaskGroup semantics):
+When reconnection is disabled, an active subscription iterator does not receive an exception by itself; it simply has no new messages to yield. Use application-level cancellation or timeouts when a consumer must stop after connectivity is lost. A later operation that requires a live connection raises `MQTTDisconnectedError`.
 
-```python
-from zmqtt import create_client, ReconnectConfig
-from zmqtt import MQTTDisconnectedError
-
-async with create_client(
-    "localhost",
-    reconnect=ReconnectConfig(enabled=False),
-) as client:
-    try:
-        async for msg in sub:
-            ...
-    except* MQTTDisconnectedError:
-        print("Connection lost, reconnection disabled")
-```
+Pending MQTT 5.0 requests have their own timeout and reconnect behaviour; see [Request / Response](advanced/request-response.md#connection-loss-and-reconnection).
 
 See [Reconnection](advanced/reconnection.md) for full details.
 

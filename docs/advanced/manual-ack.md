@@ -4,7 +4,9 @@ By default, zmqtt acknowledges incoming messages automatically as soon as they a
 
 ## Why use manual ack
 
-Use `auto_ack=False` when you need a **process-before-ack** guarantee: the message should not be considered delivered until your processing is complete. If your process crashes before calling `ack()`, the broker (for QoS 1) or the library (for QoS 2) will redeliver.
+Use `auto_ack=False` when acknowledgement must happen **after processing**. The broker does not receive the acknowledgement until your handler calls `ack()`.
+
+Manual acknowledgement controls this ordering, but it does not make the handler transactional. Redelivery after a lost connection or process restart also depends on the broker session configuration.
 
 !!! note
     Manual ack only has effect at QoS 1 (`AT_LEAST_ONCE`) or QoS 2 (`EXACTLY_ONCE`). At QoS 0 (`AT_MOST_ONCE`) there is no acknowledgement protocol, so `auto_ack=False` is a no-op. See [QoS levels](../publishing.md#qos-levels) for the delivery guarantees.
@@ -22,7 +24,7 @@ async with client.subscribe("jobs/#", qos=QoS.AT_LEAST_ONCE, auto_ack=False) as 
 
 ## QoS 1 semantics
 
-For QoS 1 messages (`AT_LEAST_ONCE`), `ack()` sends PUBACK to the broker. Until PUBACK is sent, the broker may retransmit the message (e.g. on reconnect). Each retransmission appears as a new `Message` in your queue.
+For QoS 1 messages (`AT_LEAST_ONCE`), `ack()` sends PUBACK to the broker. Until PUBACK is sent, the broker may retransmit the message. Each retransmission appears as a new `Message` in your queue, so handlers should be idempotent.
 
 ## QoS 2 semantics
 
@@ -30,21 +32,50 @@ For QoS 2 messages (`EXACTLY_ONCE`), `ack()` sends PUBREC. The library then hand
 
 ### QoS 2 deduplication during the manual-ack window
 
-Between receiving the initial PUBLISH and calling `ack()`, PUBREC has not been sent, so the broker may retransmit the PUBLISH (e.g. after a reconnect). The library silently drops the duplicate — your application sees the message exactly once regardless of how many retransmissions occur.
+Between receiving the initial PUBLISH and calling `ack()`, PUBREC has not been sent, so the broker may retransmit the PUBLISH. Retransmitted PUBLISH packets for that delivery are ignored while the same connection remains active and the message is still unacknowledged.
 
-## What happens on reconnect before `ack()`
+## Connection loss before `ack()`
 
-- **QoS 1**: the broker retransmits the message after reconnection. Your queue receives it again as a new message with the DUP flag set.
-- **QoS 2**: the library's deduplication logic ensures only one delivery regardless of reconnects.
+Manual acknowledgement alone does not preserve an unacknowledged delivery across reconnects. Broker redelivery requires a stable `client_id` and a persistent session:
 
-## Example: durable job processing
+**MQTT 3.1.1:**
+
+```python
+client = create_client(
+    "localhost",
+    client_id="jobs-worker-1",
+    clean_session=False,
+)
+```
+
+**MQTT 5.0:**
+
+```python
+client = create_client(
+    "localhost",
+    version="5.0",
+    client_id="jobs-worker-1",
+    clean_session=False,
+    session_expiry_interval=3600,
+)
+```
+
+With a persistent broker session, an unacknowledged QoS 1 or QoS 2 message may be delivered again after reconnect. QoS 2 duplicate suppression does not extend across reconnects or process restarts, so do not rely on it for exactly-once execution of application code.
+
+The default connection settings start a clean session, so they do not provide durable redelivery after a connection or process is lost.
+
+## Example: persistent job consumer
 
 ```python
 import asyncio
 from zmqtt import create_client, QoS
 
 async def main():
-    async with create_client("localhost") as client:
+    async with create_client(
+        "localhost",
+        client_id="jobs-worker-1",
+        clean_session=False,
+    ) as client:
         async with client.subscribe(
             "jobs/process",
             qos=QoS.AT_LEAST_ONCE,
@@ -55,7 +86,8 @@ async def main():
                     await process_job(msg.payload)
                     await msg.ack()
                 except Exception:
-                    # Do NOT ack — broker will redeliver
+                    # Leave the delivery unacknowledged. A persistent broker
+                    # session makes it eligible for redelivery.
                     raise
 
 asyncio.run(main())

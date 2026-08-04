@@ -99,12 +99,12 @@ the message.
 ## Timeout
 
 `request()` raises `asyncio.TimeoutError` when no matching reply arrives within
-`timeout` seconds (default `30.0`). The request's reply-topic interest is
-always cleaned up, even on timeout or cancellation.
+`timeout` seconds (default `30.0`). The client stops listening for the matching
+response after return, timeout, or cancellation.
 
-Timed-out requests are removed from the correlation dispatcher immediately.
-A late response is not retained in memory; it is ignored by request routing but
-is still delivered to any regular subscription covering that topic.
+After a timeout, a late response is not retained in memory. It cannot complete
+the expired request, but it is still delivered to any regular subscription
+covering that topic.
 
 ```python
 import asyncio
@@ -115,21 +115,28 @@ except asyncio.TimeoutError:
     print("Service did not respond in time")
 ```
 
+## Connection loss and reconnection
+
+With automatic reconnection enabled (the default), a request that has already been published continues waiting for its matching response. Its response topic is restored after reconnect, and the original `timeout` continues to apply across the interruption.
+
+With reconnection disabled, a request that is already waiting remains pending until its timeout expires. Calling `client.disconnect()` while requests are pending ends them with `MQTTDisconnectedError`.
+
 ## Errors
 
 | Exception               | Raised when                                       |
 | ----------------------- | ------------------------------------------------- |
 | `RuntimeError`          | `request()` is called on an MQTT 3.1.1 connection |
 | `MQTTInvalidTopicError` | `properties.response_topic` contains wildcards    |
-| `MQTTDisconnectedError` | Connection is lost while waiting for the reply    |
+| `MQTTDisconnectedError` | The request cannot start, or `client.disconnect()` is called while it is active |
 | `ValueError`            | Topic/correlation pair is already in use          |
 | `asyncio.TimeoutError`  | No matching reply arrives within `timeout`        |
 
 ## Request backpressure
 
-The client keeps one future per active request and never buffers unmatched or
-late response messages. `max_pending_requests` bounds the number of active
-futures (default `1000`): additional calls wait for capacity before publishing.
+The client keeps one pending result per active request and never buffers
+unmatched or late response messages. `max_pending_requests` bounds the number
+of active requests (default `1000`): additional calls wait for capacity before
+publishing.
 
 ```python
 client = create_client(

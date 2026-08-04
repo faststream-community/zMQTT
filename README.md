@@ -104,13 +104,12 @@ are transparently re-registered after reconnect — your `async for` loop keeps 
 
 ## MQTT 5.0
 
-Pass `version=5` to use MQTT 5.0. Properties are typed dataclasses:
+Pass `version="5.0"` to use MQTT 5.0. Properties are typed dataclasses:
 
 ```python
-from zmqtt import MQTTClient
-from zmqtt._internal.packets.properties import PublishProperties
+from zmqtt import MQTTClient, PublishProperties
 
-async with MQTTClient("broker.example.com", version=5) as client:
+async with MQTTClient("broker.example.com", version="5.0") as client:
     props = PublishProperties(content_type="application/json")
     await client.publish("topic", b'{"value": 42}', properties=props)
 ```
