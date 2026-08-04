@@ -28,4 +28,4 @@ asyncio.run(main())
 
 - [Getting Started](getting-started.md)
 - [API Reference](api-reference.md)
-- [GitHub](https://github.com/toxicthunder/zmqtt)
+- [GitHub](https://github.com/faststream-community/zmqtt)

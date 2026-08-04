@@ -69,7 +69,7 @@ class SubscriptionEntry:
     queue: asyncio.Queue[Message]
     auto_ack: bool = True
     actual_filter: str = ""  # filter with $share/<group>/ stripped; set on creation
-    topic_filter: str = ""  # original filter requested by the caller
+    subscription_identifier: int | None = None  # v5; echoed by the broker on PUBLISH
 
 
 class SessionState:
@@ -95,5 +95,6 @@ class SessionState:
         self.inflight_qos2_out.clear()
         self.inflight_qos2_in.clear()
         self.pending_ack_qos2_in.clear()
+        self.subscriptions.clear()
         self.pending_subs.clear()
         self.pending_unsubs.clear()

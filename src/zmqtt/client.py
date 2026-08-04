@@ -10,9 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, overload
 
-from typing_extensions import Self
-
-from zmqtt._internal._compat import defer_cancellation
+from zmqtt._internal._compat import Self, defer_cancellation
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.connect import Connect
 from zmqtt._internal.packets.properties import (
@@ -22,7 +20,7 @@ from zmqtt._internal.packets.properties import (
 )
 from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.subscribe import SubscriptionRequest
-from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.protocol import _DEFAULT_STRIPPED_PREFIXES, MQTTProtocol
 from zmqtt._internal.state import SessionState
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
@@ -43,6 +41,9 @@ __all__ = (
 )
 
 TransportFactory = Callable[[str, int, ssl.SSLContext | bool | None], Awaitable[Transport]]
+
+# MQTT 5.0 §3.8.2.1.2: a subscription identifier is a variable-byte integer.
+_MAX_SUBSCRIPTION_IDENTIFIER = 268_435_455
 
 log = logging.getLogger(__name__)
 
@@ -171,6 +172,7 @@ class Subscription:
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        subscription_identifier: int | None = None,
     ) -> None:
         self._client = client
         self._filters = filters
@@ -180,6 +182,7 @@ class Subscription:
         self._relay_tasks: list[asyncio.Task[None]] = []
         self._no_local = no_local
         self._retain_as_published = retain_as_published
+        self._subscription_identifier = subscription_identifier
         self._registered_filters: list[str] = []
 
     async def __aenter__(self) -> Self:
@@ -214,7 +217,12 @@ class Subscription:
             )
             for f in self._filters
         ]
-        _, queues = await protocol.subscribe(reqs, auto_ack=self._auto_ack)
+        _, queues = await protocol.subscribe(
+            reqs,
+            auto_ack=self._auto_ack,
+            queue_maxsize=self._queue.maxsize,
+            subscription_identifier=self._subscription_identifier,
+        )
         self._registered_filters = list(queues.keys())
         for q in queues.values():
             task: asyncio.Task[None] = asyncio.create_task(self._relay_loop(q))
@@ -300,9 +308,11 @@ class MQTTClient:
         password: str | None = None,
         tls: ssl.SSLContext | bool | None = None,
         reconnect: ReconnectConfig | None = None,
+        mqtt_connect_timeout: float = 30.0,
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
+        stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
     ) -> None:
         """Create an MQTT client.
 
@@ -329,12 +339,25 @@ class MQTTClient:
                 for a plain TCP connection.
             reconnect: Reconnection policy. Defaults to
                 :class:`ReconnectConfig` with exponential back-off enabled.
+            mqtt_connect_timeout: Seconds to wait for the broker's CONNACK during
+                the MQTT CONNECT/CONNACK handshake — distinct from the TCP socket
+                connect — before raising :exc:`MQTTTimeoutError`. Must be positive.
+                Defaults to ``30.0``.
             transport_factory: Override the low-level transport. Useful for testing.
             version: MQTT protocol version to use. Either ``"3.1.1"`` (default) or
                 ``"5.0"``.
             session_expiry_interval: MQTT 5.0 session expiry interval in seconds.
                 ``0`` means the session expires on disconnect.
+            stripped_prefixes: Group-less subscription prefixes the broker strips
+                before delivery — matched against incoming PUBLISH topics with the
+                prefix removed. Defaults to ``("$queue", "$exclusive")``; add a
+                broker-specific decorator here instead of patching the library.
+                ``$share/<group>/`` is always handled; real namespaces the broker
+                delivers on unchanged (e.g. ``$SYS``) must not be listed.
         """
+        if not mqtt_connect_timeout > 0:
+            msg = "mqtt_connect_timeout must be positive"
+            raise ValueError(msg)
         self._host = host
         self._port = port
         self._client_id = client_id
@@ -344,9 +367,11 @@ class MQTTClient:
         self._password = password
         self._tls = tls
         self._reconnect = reconnect or ReconnectConfig()
+        self._mqtt_connect_timeout = mqtt_connect_timeout
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
         self._session_expiry_interval = session_expiry_interval
+        self._stripped_prefixes = stripped_prefixes
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
         self._run_task: asyncio.Task[None] | None = None
@@ -467,6 +492,7 @@ class MQTTClient:
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        subscription_identifier: int | None = None,
     ) -> Subscription:
         """Create a :class:`Subscription` for one or more topic filters.
 
@@ -483,12 +509,20 @@ class MQTTClient:
             qos: Maximum QoS level requested from the broker.
             auto_ack: Automatically send PUBACK/PUBREC upon receipt. Set to
                 ``False`` to acknowledge manually via :meth:`Message.ack`.
-            receive_buffer_size: Maximum messages buffered in the internal queue.
-                Older messages are dropped when the queue is full.
+            receive_buffer_size: Maximum messages buffered per internal queue.
+                When the buffers are full the read loop stops pulling from the
+                socket, so a slow consumer pushes back on the broker through the
+                TCP window instead of growing memory.
             no_local: Do not receive messages published by this client (MQTT 5.0
                 only).
             retain_as_published: Preserve the retain flag on forwarded messages
                 (MQTT 5.0 only).
+            subscription_identifier: Numeric identifier (1..268435455) sent in the
+                SUBSCRIBE properties (MQTT 5.0 only). The broker echoes it on every
+                PUBLISH this subscription causes: incoming messages are routed to
+                the exact subscription that matched (essential when filters
+                overlap, e.g. a ``$share/...`` subscription plus its plain twin),
+                and the value is readable on ``Message.properties``.
 
         Raises:
             MQTTInvalidTopicError: If any filter is empty, has ``$`` in a non-leading
@@ -502,6 +536,13 @@ class MQTTClient:
         if (no_local or retain_as_published) and self._version != "5.0":
             msg = "no_local and retain_as_published require MQTT 5.0"
             raise RuntimeError(msg)
+        if subscription_identifier is not None:
+            if self._version != "5.0":
+                msg = "subscription_identifier requires MQTT 5.0"
+                raise RuntimeError(msg)
+            if not 1 <= subscription_identifier <= _MAX_SUBSCRIPTION_IDENTIFIER:
+                msg = "subscription_identifier must be in 1..268435455"
+                raise ValueError(msg)
         return Subscription(
             self,
             list(filters),
@@ -510,6 +551,7 @@ class MQTTClient:
             receive_buffer_size,
             no_local,
             retain_as_published,
+            subscription_identifier,
         )
 
     async def request(
@@ -609,7 +651,9 @@ class MQTTClient:
             transport,
             SessionState(),
             keepalive=self._keepalive,
+            connect_timeout=self._mqtt_connect_timeout,
             version=self._version,
+            stripped_prefixes=self._stripped_prefixes,
         )
         connect_props = None
         if self._version == "5.0":
@@ -639,7 +683,7 @@ class MQTTClient:
                 await self._connect()
             except MQTTConnectError:  # noqa: PERF203
                 raise
-            except OSError:
+            except (OSError, MQTTTimeoutError):
                 attempt += 1
                 max_a = self._reconnect.max_attempts
                 if not self._reconnect.enabled or (max_a is not None and attempt >= max_a):
@@ -684,6 +728,7 @@ class MQTTClient:
             log.info("Successfully reconnected")
 
 
+# No version= argument: defaults to "3.1.1", so the return type is MQTTClientV311.
 @overload
 def create_client(
     host: str,
@@ -696,6 +741,25 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    mqtt_connect_timeout: float = ...,
+    transport_factory: TransportFactory | None = ...,
+    session_expiry_interval: int = ...,
+) -> MQTTClientV311: ...
+
+
+@overload
+def create_client(
+    host: str,
+    port: int = ...,
+    *,
+    client_id: str = ...,
+    keepalive: int = ...,
+    clean_session: bool = ...,
+    username: str | None = ...,
+    password: str | None = ...,
+    tls: ssl.SSLContext | bool = ...,
+    reconnect: ReconnectConfig | None = ...,
+    mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     version: Literal["3.1.1"],
@@ -714,6 +778,7 @@ def create_client(
     password: str | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     version: Literal["5.0"],
@@ -731,6 +796,7 @@ def create_client(
     password: str | None = None,
     tls: ssl.SSLContext | bool = False,
     reconnect: ReconnectConfig | None = None,
+    mqtt_connect_timeout: float = 30.0,
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
     version: Literal["3.1.1", "5.0"] = "3.1.1",
@@ -750,6 +816,7 @@ def create_client(
         password=password,
         tls=tls,
         reconnect=reconnect,
+        mqtt_connect_timeout=mqtt_connect_timeout,
         transport_factory=transport_factory,
         version=version,
         session_expiry_interval=session_expiry_interval,

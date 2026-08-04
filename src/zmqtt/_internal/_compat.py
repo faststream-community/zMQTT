@@ -6,6 +6,13 @@ import sys
 from collections.abc import AsyncGenerator
 
 if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing_extensions import Self
+
+__all__ = ("Self", "defer_cancellation")
+
+if sys.version_info >= (3, 11):
 
     @contextlib.asynccontextmanager
     async def defer_cancellation() -> AsyncGenerator[None, None]:
