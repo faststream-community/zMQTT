@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from typing import Final, Literal, cast
 
 from zmqtt._internal import topic_matching
@@ -46,6 +46,41 @@ from zmqtt.errors import (
 log = logging.getLogger(__name__)
 
 
+class _SubscriptionGuard:
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.users = 0
+
+
+class _SubscriptionGuards:
+    """Serialize ownership changes only when topic filters overlap exactly."""
+
+    def __init__(self) -> None:
+        self._guards: dict[str, _SubscriptionGuard] = {}
+
+    @contextlib.asynccontextmanager
+    async def hold(self, filters: Iterable[str]) -> AsyncGenerator[None]:
+        entries: list[tuple[str, _SubscriptionGuard]] = []
+        for filter_ in sorted(set(filters)):
+            guard = self._guards.setdefault(filter_, _SubscriptionGuard())
+            guard.users += 1
+            entries.append((filter_, guard))
+
+        acquired = 0
+        try:
+            for _, guard in entries:
+                await guard.lock.acquire()
+                acquired += 1
+            yield
+        finally:
+            for _, guard in reversed(entries[:acquired]):
+                guard.lock.release()
+            for filter_, guard in entries:
+                guard.users -= 1
+                if guard.users == 0:
+                    self._guards.pop(filter_, None)
+
+
 def _raise_on_rejected_filters(filters: list[SubscriptionRequest], suback: SubAck) -> None:
     """Surface SUBACK failure codes (>= 0x80) instead of ignoring them.
 
@@ -80,6 +115,7 @@ class MQTTProtocol:
         connect_timeout: float = 30.0,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         stripped_prefixes: tuple[str, ...] = topic_matching._DEFAULT_STRIPPED_PREFIXES,
+        response_observer: Callable[[Message], None] | None = None,
     ) -> None:
         self._transport = transport
         self._state = state
@@ -88,8 +124,10 @@ class MQTTProtocol:
         self._connect_timeout = connect_timeout
         self._version: Final = version
         self._stripped_prefixes = stripped_prefixes
+        self._response_observer = response_observer
         self._buf = PacketBuffer(version=version)
         self._ping_waiters: list[asyncio.Future[None]] = []
+        self._subscription_guards = _SubscriptionGuards()
         self._disconnecting = False
         self._dead = False
         self.started_event = asyncio.Event()
@@ -254,9 +292,22 @@ class MQTTProtocol:
         ``_deliver`` attribute the message to the exact subscription that matched
         instead of guessing by filter specificity.
         """
-        self._ensure_alive()
-        loop = asyncio.get_running_loop()
-        pid = self._state.packet_ids.acquire()
+        async with self._subscription_guards.hold(req.topic_filter for req in filters):
+            return await self._subscribe(
+                filters,
+                auto_ack=auto_ack,
+                queue_maxsize=queue_maxsize,
+                subscription_identifier=subscription_identifier,
+            )
+
+    async def _subscribe(
+        self,
+        filters: list[SubscriptionRequest],
+        *,
+        auto_ack: bool,
+        queue_maxsize: int,
+        subscription_identifier: int | None,
+    ) -> tuple[SubAck, dict[str, asyncio.Queue[Message]]]:
         new_entries: dict[str, SubscriptionEntry] = {}
 
         for req in filters:
@@ -272,6 +323,78 @@ class MQTTProtocol:
                 )
 
         self._state.subscriptions.add_many(new_entries)
+        subscribed = False
+        try:
+            suback = await self._send_subscribe(filters, subscription_identifier)
+            subscribed = True
+            return suback, {f: entry.queue for f, entry in new_entries.items()}
+        finally:
+            if not subscribed:
+                for f in new_entries:
+                    self._state.subscriptions.remove(f)
+
+    async def unsubscribe(self, filters: list[str]) -> UnsubAck | None:
+        """Remove queues and unsubscribe filters without response observers.
+
+        Returns ``None`` when every broker subscription must stay active for
+        request/response routing.
+        """
+        async with self._subscription_guards.hold(filters):
+            return await self._unsubscribe(filters)
+
+    async def _unsubscribe(self, filters: list[str]) -> UnsubAck | None:
+        self._ensure_alive()
+        observed_filters = [f for f in filters if self._state.subscriptions.has_response_observer(f)]
+        broker_filters = [f for f in filters if f not in observed_filters]
+        for f in filters:
+            self._state.subscriptions.remove(f)
+
+        unsuback = await self._send_unsubscribe(broker_filters) if broker_filters else None
+        if observed_filters:
+            requests = [SubscriptionRequest(topic_filter=f, qos=QoS.AT_MOST_ONCE) for f in observed_filters]
+            await self._send_subscribe(requests, subscription_identifier=None)
+        return unsuback
+
+    async def add_response_observer(self, topic: str) -> None:
+        """Keep an exact response topic subscribed without claiming its messages."""
+        async with self._subscription_guards.hold([topic]):
+            await self._add_response_observer(topic)
+
+    async def _add_response_observer(self, topic: str) -> None:
+        self._ensure_alive()
+        if not self._state.subscriptions.add_response_observer(topic):
+            return
+        if self._state.subscriptions.contains(topic):
+            return
+        request = SubscriptionRequest(topic_filter=topic, qos=QoS.AT_MOST_ONCE)
+        subscribed = False
+        try:
+            await self._send_subscribe([request], subscription_identifier=None)
+            subscribed = True
+        finally:
+            if not subscribed:
+                self._state.subscriptions.remove_response_observer(topic)
+
+    async def remove_response_observer(self, topic: str) -> None:
+        """Release an exact response topic unless an application owns it."""
+        async with self._subscription_guards.hold([topic]):
+            await self._remove_response_observer(topic)
+
+    async def _remove_response_observer(self, topic: str) -> None:
+        if not self._state.subscriptions.remove_response_observer(topic):
+            return
+        if self._state.subscriptions.contains(topic) or self._dead:
+            return
+        await self._send_unsubscribe([topic])
+
+    async def _send_subscribe(
+        self,
+        filters: list[SubscriptionRequest],
+        subscription_identifier: int | None,
+    ) -> SubAck:
+        self._ensure_alive()
+        loop = asyncio.get_running_loop()
+        pid = self._state.packet_ids.acquire()
         future: asyncio.Future[SubAck] = loop.create_future()
         self._state.pending_subs[pid] = future
         properties = (
@@ -279,49 +402,38 @@ class MQTTProtocol:
             if subscription_identifier is not None
             else None
         )
-        await self._send(
-            self._encode(
-                Subscribe(packet_id=pid, subscriptions=tuple(filters), properties=properties),
-            ),
-        )
-
-        log.debug("Sent SUBSCRIBE", extra={"packet_id": pid})
-
         try:
+            await self._send(
+                self._encode(
+                    Subscribe(packet_id=pid, subscriptions=tuple(filters), properties=properties),
+                ),
+            )
+            log.debug("Sent SUBSCRIBE", extra={"packet_id": pid})
             suback = await future
             _raise_on_rejected_filters(filters, suback)
-        except Exception:
-            for f in new_entries:
-                self._state.subscriptions.remove(f)
-            raise
+            return suback
         finally:
             self._state.pending_subs.pop(pid, None)
             self._state.packet_ids.release(pid)
 
-        return suback, {f: entry.queue for f, entry in new_entries.items()}
-
-    async def unsubscribe(self, filters: list[str]) -> UnsubAck:
-        """Send UNSUBSCRIBE, remove queues from state, return UnsubAck."""
+    async def _send_unsubscribe(self, filters: list[str]) -> UnsubAck:
         self._ensure_alive()
         pid = self._state.packet_ids.acquire()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[UnsubAck] = loop.create_future()
         self._state.pending_unsubs[pid] = future
-        await self._send(
-            encode(
-                Unsubscribe(packet_id=pid, topic_filters=tuple(filters)),
-                version=self._version,
-            ),
-        )
-        log.debug("Sent UNSUBSCRIBE", extra={"packet_id": pid})
         try:
-            unsuback = await future
+            await self._send(
+                encode(
+                    Unsubscribe(packet_id=pid, topic_filters=tuple(filters)),
+                    version=self._version,
+                ),
+            )
+            log.debug("Sent UNSUBSCRIBE", extra={"packet_id": pid})
+            return await future
         finally:
             self._state.pending_unsubs.pop(pid, None)
             self._state.packet_ids.release(pid)
-            for f in filters:
-                self._state.subscriptions.remove(f)
-        return unsuback
 
     async def ping(self, timeout: float | None = None) -> float:
         """Send PINGREQ and return RTT in seconds when PINGRESP is received."""
@@ -556,6 +668,9 @@ class MQTTProtocol:
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
         selection = self._select_subscription(publish)
+        has_response_observer = self._state.subscriptions.has_response_observer(publish.topic)
+        if has_response_observer and self._response_observer is not None:
+            self._response_observer(self._make_message(publish))
         if selection.identifier_missing:
             identifier = publish.properties.subscription_identifier if publish.properties else None
             log.warning(
@@ -572,9 +687,19 @@ class MQTTProtocol:
 
         recipient = selection.recipient
         if recipient is None:
-            log.warning("No subscriber for topic %r", publish.topic)
+            if not has_response_observer:
+                log.warning("No subscriber for topic %r", publish.topic)
             return
         await self._put_message(publish, [recipient], ack_callback)
+
+    def _make_message(self, publish: Publish) -> Message:
+        return Message(
+            topic=publish.topic,
+            payload=publish.payload,
+            qos=publish.qos,
+            retain=publish.retain,
+            properties=publish.properties,
+        )
 
     async def _put_message(
         self,
@@ -583,13 +708,7 @@ class MQTTProtocol:
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
         for filter_, entry in recipients:
-            msg = Message(
-                topic=publish.topic,
-                payload=publish.payload,
-                qos=publish.qos,
-                retain=publish.retain,
-                properties=publish.properties,
-            )
+            msg = self._make_message(publish)
             if not entry.auto_ack and ack_callback is not None:
                 msg._ack_callback = ack_callback
             await entry.queue.put(msg)

@@ -471,6 +471,205 @@ class BrokerTestBase(abc.ABC):
         assert reply.properties is not None
         assert reply.properties.correlation_data is not None
 
+    async def test_concurrent_requests_share_response_topic(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        response_topic = topic + "/responses"
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            responder.subscribe(topic) as req_sub,
+        ):
+
+            async def respond_in_reverse_order() -> None:
+                requests = [await asyncio.wait_for(req_sub.get_message(), timeout=5.0) for _ in range(2)]
+                await responder.publish(response_topic, b"no-correlation")
+                await responder.publish(
+                    response_topic,
+                    b"unknown-correlation",
+                    properties=PublishProperties(correlation_data=b"unknown"),
+                )
+                for msg in reversed(requests):
+                    assert msg.properties is not None
+                    assert msg.properties.response_topic == response_topic
+                    await responder.publish(
+                        response_topic,
+                        b"reply-" + msg.payload,
+                        properties=PublishProperties(
+                            correlation_data=msg.properties.correlation_data,
+                        ),
+                    )
+
+            responder_task = asyncio.create_task(respond_in_reverse_order())
+            first, second = await asyncio.gather(
+                requester.request(
+                    topic,
+                    b"first",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"corr-first",
+                    ),
+                    timeout=5.0,
+                ),
+                requester.request(
+                    topic,
+                    b"second",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"corr-second",
+                    ),
+                    timeout=5.0,
+                ),
+            )
+            await responder_task
+
+        assert first.payload == b"reply-first"
+        assert second.payload == b"reply-second"
+
+    async def test_request_response_does_not_steal_from_regular_subscription(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        response_topic = topic + "/responses"
+        correlation_data = b"request-correlation"
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            responder.subscribe(topic) as req_sub,
+        ):
+            response_sub = requester.subscribe(response_topic)
+            await response_sub.start()
+
+            async def respond() -> None:
+                msg = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+                assert msg.properties is not None
+                await responder.publish(
+                    response_topic,
+                    b"response",
+                    properties=PublishProperties(
+                        correlation_data=msg.properties.correlation_data,
+                    ),
+                )
+
+            responder_task = asyncio.create_task(respond())
+            reply = await requester.request(
+                topic,
+                b"request",
+                properties=PublishProperties(
+                    response_topic=response_topic,
+                    correlation_data=correlation_data,
+                ),
+                timeout=5.0,
+            )
+            regular = await asyncio.wait_for(response_sub.get_message(), timeout=5.0)
+            await responder_task
+
+            # The regular subscription still owns the topic after the
+            # request observer has left.
+            await responder.publish(response_topic, b"ordinary")
+            ordinary = await asyncio.wait_for(response_sub.get_message(), timeout=5.0)
+
+            request_seen = asyncio.Event()
+            send_response = asyncio.Event()
+
+            async def respond_after_regular_subscription_stops() -> None:
+                msg = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+                assert msg.properties is not None
+                request_seen.set()
+                await send_response.wait()
+                await responder.publish(
+                    response_topic,
+                    b"response-after-stop",
+                    properties=PublishProperties(
+                        correlation_data=msg.properties.correlation_data,
+                    ),
+                )
+
+            responder_task = asyncio.create_task(respond_after_regular_subscription_stops())
+            request_task = asyncio.create_task(
+                requester.request(
+                    topic,
+                    b"request-after-stop",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"corr-after-stop",
+                    ),
+                    timeout=5.0,
+                ),
+            )
+            await asyncio.wait_for(request_seen.wait(), timeout=5.0)
+            await response_sub.stop()
+            send_response.set()
+            reply_after_stop = await request_task
+            await responder_task
+
+        assert reply.payload == b"response"
+        assert regular.payload == b"response"
+        assert ordinary.payload == b"ordinary"
+        assert reply_after_stop.payload == b"response-after-stop"
+
+    async def test_request_backpressure_delays_publish(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        response_topic = topic + "/responses"
+        async with (
+            MQTTClient(self.host, self.port, version=self.version, max_pending_requests=1) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            responder.subscribe(topic) as req_sub,
+        ):
+            first_task = asyncio.create_task(
+                requester.request(
+                    topic,
+                    b"first",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"corr-first",
+                    ),
+                    timeout=5.0,
+                ),
+            )
+            first_request = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+
+            second_task = asyncio.create_task(
+                requester.request(
+                    topic,
+                    b"second",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"corr-second",
+                    ),
+                    timeout=5.0,
+                ),
+            )
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(req_sub.get_message(), timeout=0.2)
+
+            assert first_request.properties is not None
+            await responder.publish(
+                response_topic,
+                b"reply-first",
+                properties=PublishProperties(
+                    correlation_data=first_request.properties.correlation_data,
+                ),
+            )
+            first_reply = await first_task
+
+            second_request = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+            assert second_request.properties is not None
+            await responder.publish(
+                response_topic,
+                b"reply-second",
+                properties=PublishProperties(
+                    correlation_data=second_request.properties.correlation_data,
+                ),
+            )
+            second_reply = await second_task
+
+        assert first_reply.payload == b"reply-first"
+        assert second_reply.payload == b"reply-second"
+
     async def test_request_timeout(self, topic: str) -> None:
         if self.version != "5.0":
             return
@@ -479,12 +678,49 @@ class BrokerTestBase(abc.ABC):
             with pytest.raises(asyncio.TimeoutError):
                 await client.request(topic + "/nobody-listening", b"ping", timeout=0.3)
 
-    async def test_request_reply_topic_unsubscribed_after_timeout(self, topic: str) -> None:
+    async def test_late_response_after_timeout_is_not_retained(self, topic: str) -> None:
         if self.version != "5.0":
             return
 
-        async with MQTTClient(self.host, self.port, version=self.version) as client:
-            sub_count_before = len(client._subscriptions)
-            with contextlib.suppress(asyncio.TimeoutError):
-                await client.request(topic + "/void", b"x", timeout=0.1)
-            assert len(client._subscriptions) == sub_count_before
+        response_topic = topic + "/late-response"
+        request_seen = asyncio.Event()
+        send_response = asyncio.Event()
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            requester.subscribe(response_topic) as response_sub,
+            responder.subscribe(topic) as req_sub,
+        ):
+
+            async def respond_late() -> None:
+                msg = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+                assert msg.properties is not None
+                request_seen.set()
+                await send_response.wait()
+                await responder.publish(
+                    response_topic,
+                    b"late",
+                    properties=PublishProperties(
+                        correlation_data=msg.properties.correlation_data,
+                    ),
+                )
+
+            responder_task = asyncio.create_task(respond_late())
+            request_task = asyncio.create_task(
+                requester.request(
+                    topic,
+                    b"request",
+                    timeout=0.3,
+                    properties=PublishProperties(response_topic=response_topic),
+                ),
+            )
+            await asyncio.wait_for(request_seen.wait(), timeout=5.0)
+            with pytest.raises(asyncio.TimeoutError):
+                await request_task
+            assert requester._request_dispatcher.pending_count == 0
+
+            send_response.set()
+            late = await asyncio.wait_for(response_sub.get_message(), timeout=5.0)
+            await responder_task
+
+        assert late.payload == b"late"

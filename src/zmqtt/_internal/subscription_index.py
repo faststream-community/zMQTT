@@ -33,6 +33,7 @@ class SubscriptionIndex:
         self._root = _Node()
         self._entries: dict[str, SubscriptionEntry] = {}
         self._by_identifier: dict[int, dict[str, SubscriptionEntry]] = {}
+        self._response_observers: set[str] = set()
 
     def add(self, filter_: str, entry: SubscriptionEntry) -> None:
         if filter_ in self._entries:
@@ -52,6 +53,25 @@ class SubscriptionIndex:
 
     def contains(self, filter_: str) -> bool:
         return filter_ in self._entries
+
+    def add_response_observer(self, topic: str) -> bool:
+        """Register an exact response-topic observer.
+
+        Returns ``True`` only for the first observer on this connection.
+        """
+        if topic in self._response_observers:
+            return False
+        self._response_observers.add(topic)
+        return True
+
+    def remove_response_observer(self, topic: str) -> bool:
+        if topic not in self._response_observers:
+            return False
+        self._response_observers.remove(topic)
+        return True
+
+    def has_response_observer(self, topic: str) -> bool:
+        return topic in self._response_observers
 
     def get(self, filter_: str, default: SubscriptionEntry | None = None) -> SubscriptionEntry | None:
         return self._entries.get(filter_, default)
@@ -77,6 +97,7 @@ class SubscriptionIndex:
         self._root = _Node()
         self._entries.clear()
         self._by_identifier.clear()
+        self._response_observers.clear()
 
     def add_many(self, entries: Mapping[str, SubscriptionEntry]) -> None:
         for filter_, entry in entries.items():

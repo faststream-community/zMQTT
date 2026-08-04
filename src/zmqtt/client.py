@@ -21,6 +21,7 @@ from zmqtt._internal.packets.properties import (
 from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.subscribe import SubscriptionRequest
 from zmqtt._internal.protocol import MQTTProtocol
+from zmqtt._internal.request_response import _RequestDispatcher
 from zmqtt._internal.state import SessionState
 from zmqtt._internal.topic_matching import _DEFAULT_STRIPPED_PREFIXES
 from zmqtt._internal.transport.base import Transport
@@ -314,6 +315,7 @@ class MQTTClient:
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
         stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
+        max_pending_requests: int = 1000,
     ) -> None:
         """Create an MQTT client.
 
@@ -355,6 +357,8 @@ class MQTTClient:
                 broker-specific decorator here instead of patching the library.
                 ``$share/<group>/`` is always handled; real namespaces the broker
                 delivers on unchanged (e.g. ``$SYS``) must not be listed.
+            max_pending_requests: Maximum concurrent MQTT 5.0 ``request()`` calls.
+                Additional calls wait until capacity is available.
         """
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
@@ -373,6 +377,7 @@ class MQTTClient:
         self._version: Final = version
         self._session_expiry_interval = session_expiry_interval
         self._stripped_prefixes = stripped_prefixes
+        self._request_dispatcher = _RequestDispatcher(max_pending_requests)
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
         self._run_task: asyncio.Task[None] | None = None
@@ -386,6 +391,7 @@ class MQTTClient:
     async def __aexit__(self, *exc: object) -> None:
         """Disconnect cleanly and cancel the run loop."""
         async with defer_cancellation():
+            await self._request_dispatcher.cancel_pending()
             if self._run_task is not None:
                 self._run_task.cancel()
                 await asyncio.gather(self._run_task, return_exceptions=True)
@@ -567,7 +573,9 @@ class MQTTClient:
         """Send a request and wait for exactly one reply (MQTT 5.0 only).
 
         Publishes *payload* to *topic* with a ``response_topic`` property, then
-        waits for the first message that arrives on that topic and returns it.
+        waits for a message whose ``correlation_data`` matches the request.
+        Other messages on the response topic remain available to regular
+        subscriptions and do not complete this request.
 
         Both ``response_topic`` and ``correlation_data`` are taken from
         *properties* when set; otherwise they are generated automatically
@@ -586,13 +594,16 @@ class MQTTClient:
                 the responder.
 
         Returns:
-            The first ``Message`` received on the reply topic.
+            The matching response ``Message``.
 
         Raises:
             RuntimeError: If the client is not using MQTT 5.0.
             MQTTInvalidTopicError: If ``properties.response_topic`` contains wildcards.
             MQTTDisconnectedError: If the connection is lost while waiting.
-            asyncio.TimeoutError: If no reply arrives within *timeout* seconds.
+            ValueError: If the same response topic and correlation data are
+                already used by another active request.
+            asyncio.TimeoutError: If no matching reply arrives within *timeout*
+                seconds.
         """
         if self._version != "5.0":
             msg = "request() requires MQTT 5.0"
@@ -621,9 +632,12 @@ class MQTTClient:
                 correlation_data=corr,
             )
 
-        async with self.subscribe(reply_topic, receive_buffer_size=1) as sub:
+        pending = await self._request_dispatcher.register(reply_topic, corr)
+        try:
             await self.publish(topic, payload, qos=qos, properties=req_props)
-            return await asyncio.wait_for(sub.get_message(), timeout=timeout)
+            return await asyncio.wait_for(pending.future, timeout=timeout)
+        finally:
+            await pending.close()
 
     async def auth(self, method: str, data: bytes | None = None) -> None:
         """Send an AUTH packet for enhanced authentication (MQTT 5.0 only).
@@ -655,6 +669,7 @@ class MQTTClient:
             connect_timeout=self._mqtt_connect_timeout,
             version=self._version,
             stripped_prefixes=self._stripped_prefixes,
+            response_observer=self._request_dispatcher.dispatch,
         )
         connect_props = None
         if self._version == "5.0":
@@ -675,6 +690,7 @@ class MQTTClient:
             await transport.close()
             raise
         self._protocol = protocol
+        self._request_dispatcher.bind(protocol)
 
     async def _connect_with_retry(self) -> None:
         delay = self._reconnect.initial_delay
@@ -707,11 +723,12 @@ class MQTTClient:
                 # Run the protocol as a sub-task so _read_loop is live while we
                 # re-subscribe.  For the first connection subs_to_restore is empty,
                 # so this collapses to the original "await protocol.run()" pattern.
+                await self._protocol.started_event.wait()
                 if subs_to_restore:
-                    await self._protocol.started_event.wait()
                     for sub in subs_to_restore:
                         await sub._reconnect(self._protocol)
                     subs_to_restore = []
+                await self._request_dispatcher.restore()
                 await protocol_run_task
 
             except (MQTTDisconnectedError, MQTTTimeoutError):
@@ -745,6 +762,7 @@ def create_client(
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
+    max_pending_requests: int = ...,
 ) -> MQTTClientV311: ...
 
 
@@ -763,6 +781,7 @@ def create_client(
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
+    max_pending_requests: int = ...,
     version: Literal["3.1.1"],
 ) -> MQTTClientV311: ...
 
@@ -782,6 +801,7 @@ def create_client(
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
+    max_pending_requests: int = ...,
     version: Literal["5.0"],
 ) -> MQTTClientV5: ...
 
@@ -800,6 +820,7 @@ def create_client(
     mqtt_connect_timeout: float = 30.0,
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
+    max_pending_requests: int = 1000,
     version: Literal["3.1.1", "5.0"] = "3.1.1",
 ) -> MQTTClientV311 | MQTTClientV5:
     """Create a version-typed MQTT client.
@@ -821,4 +842,5 @@ def create_client(
         transport_factory=transport_factory,
         version=version,
         session_expiry_interval=session_expiry_interval,
+        max_pending_requests=max_pending_requests,
     )

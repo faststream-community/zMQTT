@@ -16,10 +16,16 @@ async with create_client("broker", version="5.0") as client:
 
 `request()` handles the full flow automatically:
 
-1. Subscribes to a unique reply topic before publishing.
+1. Acquires the response topic before publishing. When omitted, a unique topic
+   is generated automatically.
 2. Publishes the request with `response_topic` and `correlation_data` set.
-3. Waits for the first message on the reply topic and returns it.
-4. Unsubscribes on return, timeout, or cancellation.
+3. Waits for a message with matching `correlation_data` and returns it.
+4. Releases its response-topic interest on return, timeout, or cancellation.
+
+Messages without correlation data or with a different value do not complete
+the request. If a regular `Subscription` also covers the response topic, it
+still receives every message: request routing observes deliveries without
+consuming the subscription queue.
 
 ## Customising via `PublishProperties`
 
@@ -49,6 +55,12 @@ reply = await client.request(
 )
 ```
 
+The same custom response topic can be shared by concurrent requests as long as
+their correlation data differs. Responses may arrive in any order; each one is
+routed to the matching `request()` call. Reusing the same response topic and
+correlation data while a request is active raises `ValueError` because the two
+responses would be indistinguishable.
+
 ## Implementing a responder
 
 The responder reads `response_topic` and `correlation_data` from the
@@ -58,6 +70,8 @@ incoming message and publishes the reply there:
 async with client.subscribe("services/translate") as sub:
     async for msg in sub:
         assert msg.properties is not None
+        assert msg.properties.response_topic is not None
+        assert msg.properties.correlation_data is not None
         result = translate(msg.payload)
         await client.publish(
             msg.properties.response_topic,
@@ -68,11 +82,29 @@ async with client.subscribe("services/translate") as sub:
         )
 ```
 
+The [MQTT 5.0 request/response flow, section 4.10.1](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html)
+specifies that when a Request Message contains Correlation Data, the responder
+copies that property into the Response Message. `request()` always includes
+Correlation Data, using the caller-provided value or generating 16 random
+bytes. A compatible responder therefore has to return the same bytes unchanged;
+it must not omit the property or generate a new value.
+
+The broker only forwards Correlation Data; it does not add it to the response
+on behalf of the responder. A response without Correlation Data, or with a
+different value, cannot be associated with the active request. `request()`
+ignores that message and continues waiting for a matching response until its
+timeout. Any regular subscription covering the response topic still receives
+the message.
+
 ## Timeout
 
-`request()` raises `asyncio.TimeoutError` when no reply arrives within
-`timeout` seconds (default `30.0`). The reply subscription is always
-cleaned up, even on timeout or cancellation.
+`request()` raises `asyncio.TimeoutError` when no matching reply arrives within
+`timeout` seconds (default `30.0`). The request's reply-topic interest is
+always cleaned up, even on timeout or cancellation.
+
+Timed-out requests are removed from the correlation dispatcher immediately.
+A late response is not retained in memory; it is ignored by request routing but
+is still delivered to any regular subscription covering that topic.
 
 ```python
 import asyncio
@@ -90,7 +122,22 @@ except asyncio.TimeoutError:
 | `RuntimeError`          | `request()` is called on an MQTT 3.1.1 connection |
 | `MQTTInvalidTopicError` | `properties.response_topic` contains wildcards    |
 | `MQTTDisconnectedError` | Connection is lost while waiting for the reply    |
-| `asyncio.TimeoutError`  | No reply arrives within `timeout` seconds         |
+| `ValueError`            | Topic/correlation pair is already in use          |
+| `asyncio.TimeoutError`  | No matching reply arrives within `timeout`        |
+
+## Request backpressure
+
+The client keeps one future per active request and never buffers unmatched or
+late response messages. `max_pending_requests` bounds the number of active
+futures (default `1000`): additional calls wait for capacity before publishing.
+
+```python
+client = create_client(
+    "broker",
+    version="5.0",
+    max_pending_requests=100,
+)
+```
 
 !!! note
 `request()` is only available on MQTT 5.0 connections. Use
