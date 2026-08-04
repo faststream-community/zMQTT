@@ -43,7 +43,7 @@ from zmqtt.errors import (
     MQTTTimeoutError,
 )
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("zmqtt.protocol")
 
 
 class _SubscriptionGuard:

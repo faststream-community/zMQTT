@@ -51,6 +51,12 @@
     options:
       show_source: false
 
+## Utilities
+
+::: zmqtt.topic_matches
+    options:
+      show_source: false
+
 ## Enumerations
 
 ::: zmqtt.QoS

@@ -34,6 +34,30 @@ async with MQTTClient("broker.example.com") as client:
     await client.publish("jobs/resize", b"image-42.jpg", qos=QoS.AT_LEAST_ONCE)
 ```
 
+## Broker-specific subscription prefixes
+
+Some brokers provide group-less subscription prefixes in addition to the standard `$share/<group>/...` syntax. zmqtt recognises `$queue/...` and `$exclusive/...` by default. The broker removes such a prefix before delivering the message, so a subscription to `$queue/jobs/#` receives messages published to `jobs/#`.
+
+Use `stripped_prefixes` to support another prefix used by your broker. The tuple replaces the defaults, so include any default prefixes you still need:
+
+```python
+client = MQTTClient(
+    "broker.example.com",
+    stripped_prefixes=("$queue", "$exclusive", "$q"),
+)
+```
+
+The public `topic_matches()` helper follows the same rules when matching topics outside an active subscription:
+
+```python
+from zmqtt import topic_matches
+
+assert topic_matches("$queue/jobs/+", "jobs/resize")
+assert topic_matches("$q/jobs/+", "jobs/resize", stripped_prefixes=("$q",))
+```
+
+Do not add namespaces such as `$SYS` to `stripped_prefixes`: brokers publish those topics with the namespace intact.
+
 ## QoS recommendation
 
 Use **QoS 1** (`AT_LEAST_ONCE`) or **QoS 2** (`EXACTLY_ONCE`) for shared subscriptions. With QoS 0 the broker makes no delivery guarantees; if the chosen worker disconnects mid-flight the message is silently dropped. QoS 1 ensures the message is redelivered to another group member on reconnect.
@@ -44,12 +68,13 @@ For strict exactly-once semantics use QoS 2 or handle idempotency at the applica
 
 All brokers supported by zmqtt's test suite accept the `$share/<group>/<topic>` syntax for both MQTT 3.1.1 and 5.0 connections:
 
-| Broker | Supported since | Notes |
-|--------|----------------|-------|
-| Apache ActiveMQ Artemis | 2.16.0 | MQTT 3.1.1 and 5.0 |
-| Eclipse Mosquitto | 2.0.0 | MQTT 3.1.1 and 5.0 |
-| HiveMQ CE | 2021.1 | MQTT 3.1.1 and 5.0 |
-| NanoMQ | 0.6.0 | MQTT 3.1.1 and 5.0; rejects double-slash filters — see note below |
+| Broker | MQTT versions tested | Notes |
+|--------|----------------------|-------|
+| Apache ActiveMQ Artemis | 3.1.1 and 5.0 | Standard `$share/<group>/...` syntax |
+| Eclipse Mosquitto | 3.1.1 and 5.0 | Standard `$share/<group>/...` syntax |
+| EMQX | 3.1.1 and 5.0 | Also tested with group-less `$queue/...` subscriptions |
+| HiveMQ CE | 3.1.1 and 5.0 | Standard `$share/<group>/...` syntax |
+| NanoMQ | 3.1.1 and 5.0 | Rejects double-slash filters — see note below |
 
 > **NanoMQ — avoid double slashes in shared filters**
 >

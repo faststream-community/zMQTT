@@ -28,13 +28,12 @@ await sub.stop()
 
 ### Buffering and backpressure
 
-Each `Subscription` buffers incoming messages in an internal queue. The size of this buffer is controlled by the `receive_buffer_size` parameter, see [Backpressure](advanced/backpressure.md)
+Each `Subscription` buffers incoming messages. The size of this buffer is controlled by `receive_buffer_size`; the default is `1000` messages. See [Backpressure](advanced/backpressure.md) for how a full buffer slows message delivery.
 
-If `receive_buffer_size` > 0 - limits the queue to that number of messages.
+- A positive value limits the buffer to that many messages.
+- `0` makes the buffer unbounded.
 
-If `receive_buffer_size` == 0 - (default) → a safe default of 1000 messages is used.
-
-When the buffer is full, message delivery is naturally slowed down (backpressure) instead of growing memory usage indefinitely.
+When a bounded buffer is full, message delivery is naturally slowed down instead of allowing memory usage to grow indefinitely.
 
 ## Async iterator
 

@@ -6,9 +6,8 @@ zmqtt uses the standard `logging` module with the following logger names:
 
 ```
 zmqtt
-  ├── zmqtt.transport
-  ├── zmqtt.protocol
-  └── zmqtt.client
+  ├── zmqtt.client
+  └── zmqtt.protocol
 ```
 
 Configure any of these with the standard `logging` API.
@@ -32,30 +31,27 @@ logging.getLogger("zmqtt.protocol").setLevel(logging.DEBUG)
 
 ## What DEBUG output looks like
 
-At `DEBUG` level, the protocol layer logs every packet sent and received:
+At `DEBUG` level, the protocol logger reports connection and packet activity. A typical stream contains:
 
 ```
-DEBUG zmqtt.protocol  → CONNECT client_id='' clean_session=True keepalive=60
-DEBUG zmqtt.protocol  ← CONNACK session_present=False return_code=0
-DEBUG zmqtt.protocol  → SUBSCRIBE filters=['sensors/#']
-DEBUG zmqtt.protocol  ← SUBACK return_codes=[0]
-DEBUG zmqtt.protocol  ← PUBLISH topic='sensors/temp' qos=0 retain=False
-DEBUG zmqtt.protocol  → PINGREQ
-DEBUG zmqtt.protocol  ← PINGRESP
-DEBUG zmqtt.protocol  → DISCONNECT
+DEBUG zmqtt.protocol  Connecting
+DEBUG zmqtt.protocol  Sending 27 bytes
+INFO  zmqtt.protocol  Connected
+DEBUG zmqtt.protocol  Sent SUBSCRIBE
+DEBUG zmqtt.protocol  Received PingResp()
 ```
 
 At `INFO` level the client layer logs reconnection events:
 
 ```
-WARNING zmqtt.client  Connection lost, reconnecting in 1.0s
+WARNING zmqtt.client  Connection lost, reconnecting...
 INFO    zmqtt.client  Successfully reconnected
 ```
 
 Duplicate-filter warnings come from `zmqtt.protocol` (see [Subscribing — Duplicate-filter guard](subscribing.md#duplicate-filter-guard)):
 
 ```
-WARNING zmqtt.protocol  Filter 'data/temp' already registered; skipping duplicate
+WARNING zmqtt.protocol  Filter 'data/temp' already subscribed (ignored)
 ```
 
 ---

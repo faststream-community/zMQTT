@@ -72,21 +72,31 @@ async for msg in sub:
 Additional keyword arguments are available on 5.0 connections:
 
 ```python
+from zmqtt import RetainHandling
+
 async with client.subscribe(
     "local/events",
-    no_local=True,          # do not receive own publishes
+    no_local=True,             # do not receive own publishes
     retain_as_published=True,  # preserve the retain flag as published
+    retain_handling=RetainHandling.SEND_IF_NOT_EXISTS,
+    subscription_identifier=7,
 ) as sub:
-    ...
+    async for msg in sub:
+        if msg.properties is not None:
+            print(msg.properties.subscription_identifier)
 ```
 
 | Option | Type | Description |
 |--------|------|-------------|
 | `no_local` | `bool` | Skip messages published by this client |
 | `retain_as_published` | `bool` | Forward the original retain flag, not the delivery flag |
+| `retain_handling` | `RetainHandling` | Control when retained messages are sent for this subscription |
+| `subscription_identifier` | `int \| None` | Ask the broker to identify messages caused by this subscription |
 
 !!! warning
-    `no_local` and `retain_as_published` raise `RuntimeError` when used on a `version="3.1.1"` connection.
+    These options require MQTT 5.0. Using a 5.0-only value on a `version="3.1.1"` connection raises `RuntimeError`. A subscription identifier must be between `1` and `268435455`.
+
+The broker copies `subscription_identifier` into matching PUBLISH packets, where it is available as `msg.properties.subscription_identifier`. This is especially useful when separate subscriptions have overlapping filters.
 
 ## Request / response (`client.request()`)
 

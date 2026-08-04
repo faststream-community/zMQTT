@@ -142,6 +142,7 @@ class MQTTClientV5(Protocol):
         no_local: bool = False,
         retain_as_published: bool = False,
         retain_handling: RetainHandling = RetainHandling.SEND_ON_SUBSCRIBE,
+        subscription_identifier: int | None = None,
     ) -> "Subscription": ...
 
     async def auth(self, method: str, data: bytes | None = None) -> None: ...
@@ -525,7 +526,8 @@ class MQTTClient:
             receive_buffer_size: Maximum messages buffered per internal queue.
                 When the buffers are full the read loop stops pulling from the
                 socket, so a slow consumer pushes back on the broker through the
-                TCP window instead of growing memory.
+                TCP window instead of growing memory. ``0`` makes the queues
+                unbounded; the default is ``1000``.
             no_local: Do not receive messages published by this client (MQTT 5.0
                 only).
             retain_as_published: Preserve the retain flag on forwarded messages
