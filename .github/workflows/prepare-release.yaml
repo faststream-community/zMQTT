@@ -68,7 +68,6 @@ jobs:
 
       - name: Refresh generated files
         run: |
-          cp CHANGELOG.md docs/changelog.md
           uv lock
           uv lock --check
 
@@ -87,7 +86,7 @@ jobs:
           git switch --create "$release_branch"
           git config user.name "zmqtt-release[bot]"
           git config user.email "zmqtt-release[bot]@users.noreply.github.com"
-          git add pyproject.toml uv.lock CHANGELOG.md docs/changelog.md
+          git add pyproject.toml uv.lock CHANGELOG.md
           git diff --cached --check
           git commit -m "chore: Prepare release ${tag}"
 
