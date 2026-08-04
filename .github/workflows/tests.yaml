@@ -4,6 +4,11 @@ on:
   pull_request:
   push:
     branches: [master]
+  merge_group:
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,7 +24,7 @@ jobs:
 
     services:
       artemis:
-        image: apache/activemq-artemis:latest-alpine
+        image: apache/activemq-artemis:latest-alpine@sha256:1bce124d2324faeb1253e2db4bb68d64decf46412ecfd8d9ef46c08b1b4af5b4
         env:
           ANONYMOUS_LOGIN: "true"
         ports:
@@ -28,7 +33,7 @@ jobs:
           --security-opt no-new-privileges:true
 
       mosquitto:
-        image: eclipse-mosquitto:2
+        image: eclipse-mosquitto:2@sha256:6f8d8a947c506f8a2290ec65cd4bd2bc7cb4d43fb5f6271f861cb013e2ef9797  # 2.1.2-alpine
         ports:
           - 1884:1883
         options: >-
@@ -56,7 +61,7 @@ jobs:
           --security-opt no-new-privileges:true
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -69,11 +74,12 @@ jobs:
           EOF
 
       - name: Copy mosquitto config
+        env:
+          MOSQUITTO_ID: ${{ job.services.mosquitto.id }}
         run: |
-          MOSQUITTO_ID=$(docker ps -q --filter "ancestor=eclipse-mosquitto:2")
           echo "Mosquitto container: $MOSQUITTO_ID"
-          docker cp docker/mosquitto.conf $MOSQUITTO_ID:/mosquitto/config/mosquitto.conf
-          docker exec $MOSQUITTO_ID chmod 644 /mosquitto/config/mosquitto.conf
+          docker cp docker/mosquitto.conf "$MOSQUITTO_ID:/mosquitto/config/mosquitto.conf"
+          docker exec "$MOSQUITTO_ID" chmod 644 /mosquitto/config/mosquitto.conf
 
       - name: Wait for brokers
         run: |
@@ -85,13 +91,10 @@ jobs:
             nc -zv localhost $port || echo "Port $port not responding"
           done
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --group dev
+      - run: uv sync --locked --group dev
       - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml
       - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
@@ -106,7 +109,7 @@ jobs:
         python-version: ["3.10", "3.14"]
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -117,10 +120,10 @@ jobs:
           $(brew --prefix)/sbin/mosquitto -c /tmp/mosquitto.conf -d
           sleep 2
 
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --group dev
+      - run: uv sync --locked --group dev
       - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
       - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:
@@ -135,7 +138,7 @@ jobs:
         python-version: ["3.10", "3.14"]
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -147,10 +150,10 @@ jobs:
           Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" -ArgumentList "-c $env:TEMP\mosquitto.conf" -WindowStyle Hidden
           Start-Sleep -Seconds 3
 
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78  # v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --group dev
+      - run: uv sync --locked --group dev
       - run: uv run pytest -vv --cov=src/zmqtt --cov-report=xml --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
       - uses: codecov/codecov-action@1af58845a975a7985b0beb0cbe6fbbb71a41dbad  # v5
         with:

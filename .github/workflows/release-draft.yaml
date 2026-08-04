@@ -1,0 +1,136 @@
+name: Draft release
+
+on:
+  pull_request:
+    types: [closed]
+
+concurrency:
+  group: draft-release-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build release artifacts
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'master' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release/v') &&
+      startsWith(github.event.pull_request.title, 'chore: prepare release v')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.package.outputs.tag }}
+      prerelease: ${{ steps.package.outputs.prerelease }}
+    env:
+      RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          python-version: "3.10"
+          enable-cache: false
+
+      - name: Validate and build distributions
+        id: package
+        env:
+          RELEASE_VENV: ${{ runner.temp }}/zmqtt-release-venv
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid package version: $version"
+            exit 1
+          fi
+
+          tag="v${version}"
+          if [[ "$RELEASE_BRANCH" != "release/${tag}" ]]; then
+            echo "::error::Release branch ${RELEASE_BRANCH} does not match package version ${version}"
+            exit 1
+          fi
+
+          uv lock --check
+          cmp CHANGELOG.md docs/changelog.md
+          uv build
+          uv venv "$RELEASE_VENV"
+          uv pip install --python "$RELEASE_VENV/bin/python" dist/*.whl
+          expected_version=$(uv version --short)
+          installed_version=$("$RELEASE_VENV/bin/python" -c 'from importlib.metadata import version; print(version("zmqtt"))')
+          test "$installed_version" = "$expected_version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: release-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  draft:
+    name: Create draft release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      RELEASE_TAG: ${{ needs.build.outputs.tag }}
+      RELEASE_IS_PRERELEASE: ${{ needs.build.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download verified distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: release-distributions
+          path: dist
+
+      - name: Create immutable release tag
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/${RELEASE_TAG}"
+            tagged_sha=$(git rev-list -n 1 FETCH_HEAD)
+            if [[ "$tagged_sha" != "$RELEASE_SHA" ]]; then
+              echo "::error::Existing tag ${RELEASE_TAG} points to ${tagged_sha}, expected ${RELEASE_SHA}"
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$RELEASE_TAG" "$RELEASE_SHA" --message "Release ${RELEASE_TAG}"
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/${RELEASE_TAG}"
+          fi
+
+      - name: Create or refresh draft release
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            is_draft=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq .draft)
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::Release ${RELEASE_TAG} is already published"
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            release_args=(--draft --generate-notes --title "$RELEASE_TAG" --verify-tag)
+            if [[ "$RELEASE_IS_PRERELEASE" == "true" ]]; then
+              release_args+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" dist/* "${release_args[@]}"
+          fi

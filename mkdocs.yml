@@ -1,6 +1,6 @@
 site_name: zmqtt
 site_description: Pure asyncio MQTT 3.1.1 / 5.0 client
-site_url: https://borisalekseev.github.io/zmqtt/
+site_url: https://faststream-community.github.io/zMQTT/
 repo_url: https://github.com/faststream-community/zMQTT
 theme:
   name: material

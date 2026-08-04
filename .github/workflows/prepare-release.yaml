@@ -1,0 +1,121 @@
+name: Prepare release
+run-name: Prepare ${{ inputs.bump }} release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version increment; auto derives it from Conventional Commits
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+      prerelease:
+        description: Create a prerelease using the configured prerelease token
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: prepare-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    name: Prepare release PR
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
+        with:
+          python-version: "3.10"
+          enable-cache: false
+
+      - name: Calculate version and update release files
+        id: release
+        uses: python-semantic-release/python-semantic-release@39dd2052f2ce8282a5d932c31d58a2ca06d2550e  # v10.6.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          strict: "true"
+          force: ${{ inputs.bump != 'auto' && inputs.bump || '' }}
+          prerelease: ${{ inputs.prerelease }}
+          commit: "false"
+          tag: "false"
+          push: "false"
+          vcs_release: "false"
+          build: "false"
+          changelog: "true"
+
+      - name: Require a releasable change
+        if: steps.release.outputs.released != 'true'
+        run: |
+          echo "::error::No release is due. Select an explicit patch, minor, or major bump if this is intentional."
+          exit 1
+
+      - name: Refresh generated files
+        run: |
+          cp CHANGELOG.md docs/changelog.md
+          uv lock
+          uv lock --check
+
+      - name: Create release pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid release version: $RELEASE_VERSION"
+            exit 1
+          fi
+
+          tag="v${RELEASE_VERSION}"
+          release_branch="release/${tag}"
+          git switch --create "$release_branch"
+          git config user.name "zmqtt-release[bot]"
+          git config user.email "zmqtt-release[bot]@users.noreply.github.com"
+          git add pyproject.toml uv.lock CHANGELOG.md docs/changelog.md
+          git diff --cached --check
+          git commit -m "chore: Prepare release ${tag}"
+
+          remote_ref="refs/remotes/origin/${release_branch}"
+          if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/${release_branch}:${remote_ref}"
+            if ! git diff --quiet "$remote_ref" HEAD --; then
+              echo "::error::Branch ${release_branch} already exists with different contents"
+              exit 1
+            fi
+            echo "Reusing existing branch ${release_branch}"
+          else
+            git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${release_branch}"
+          fi
+
+          existing_pr=$(gh pr list \
+            --base master \
+            --head "$release_branch" \
+            --state open \
+            --json url \
+            --jq '.[0].url // ""')
+          if [[ -n "$existing_pr" ]]; then
+            echo "Release pull request already exists: ${existing_pr}"
+            exit 0
+          fi
+
+          gh pr create \
+            --base master \
+            --head "$release_branch" \
+            --title "chore: Prepare release ${tag}" \
+            --body "Automated release preparation for ${tag}. Review the version and changelog, then merge through the merge queue."
