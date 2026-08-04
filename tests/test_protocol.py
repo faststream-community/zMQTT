@@ -20,12 +20,11 @@ from zmqtt._internal.packets.publish import PubAck, Publish
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import SubAck, Subscribe, SubscriptionRequest
 from zmqtt._internal.protocol import (
-    _DEFAULT_STRIPPED_PREFIXES,
     MQTTProtocol,
     _raise_on_rejected_filters,
-    _shared_filter_to_actual,
 )
 from zmqtt._internal.state import SessionState, SubscriptionEntry
+from zmqtt._internal.topic_matching import _DEFAULT_STRIPPED_PREFIXES, _shared_filter_to_actual
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
 from zmqtt.errors import (

@@ -16,6 +16,13 @@ class _Node:
     entries: list[tuple[str, SubscriptionEntry]] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class SubscriptionSelection:
+    recipient: tuple[str, SubscriptionEntry] | None
+    identifier_missing: bool = False
+    tied_filters: tuple[str, ...] = ()
+
+
 class SubscriptionIndex:
     def __init__(self) -> None:
         self._root = _Node()
@@ -75,27 +82,53 @@ class SubscriptionIndex:
 
     def match(self, topic: str) -> list[tuple[str, SubscriptionEntry]]:
         matches: list[tuple[str, SubscriptionEntry]] = []
-        self._collect(self._root, topic.split("/"), 0, matches)
+        self._collect(
+            node=self._root,
+            parts=topic.split("/"),
+            collect_to=matches,
+        )
         filtered = [item for item in matches if _topic_matches(self._actual_filter(*item), topic)]
         return sorted(filtered, key=lambda item: self._specificity(self._actual_filter(*item)))
 
     def best(self, topic: str) -> tuple[str, SubscriptionEntry] | None:
-        matches = self.match(topic)
-        if not matches:
-            return None
-        return matches[0]
+        return self.select(topic).recipient
 
     def by_identifier(self, identifier: int) -> list[tuple[str, SubscriptionEntry]]:
         return list(self._by_identifier.get(identifier, {}).items())
 
-    def best_for_identifier(self, identifier: int, topic: str) -> tuple[str, SubscriptionEntry] | None:
-        identified = self.by_identifier(identifier)
-        if not identified:
-            return None
+    def select(
+        self,
+        topic: str,
+        *,
+        subscription_identifier: int | None = None,
+    ) -> SubscriptionSelection:
+        identifier_missing = False
+        if subscription_identifier is not None:
+            identified = self.by_identifier(subscription_identifier)
+            if identified:
+                matching = [item for item in identified if _topic_matches(self._actual_filter(*item), topic)]
+                return self._select_from(matching or identified)
+            identifier_missing = True
 
-        matching = [item for item in identified if _topic_matches(self._actual_filter(*item), topic)]
-        pool = matching or identified
-        return min(pool, key=lambda item: self._specificity(self._actual_filter(*item)))
+        return self._select_from(self.match(topic), identifier_missing=identifier_missing)
+
+    def _select_from(
+        self,
+        candidates: list[tuple[str, SubscriptionEntry]],
+        *,
+        identifier_missing: bool = False,
+    ) -> SubscriptionSelection:
+        if not candidates:
+            return SubscriptionSelection(recipient=None, identifier_missing=identifier_missing)
+
+        best_key = min(self._specificity(self._actual_filter(*item)) for item in candidates)
+        winners = [item for item in candidates if self._specificity(self._actual_filter(*item)) == best_key]
+        tied_filters = tuple(filter_ for filter_, _ in winners) if len(winners) > 1 else ()
+        return SubscriptionSelection(
+            recipient=winners[0],
+            identifier_missing=identifier_missing,
+            tied_filters=tied_filters,
+        )
 
     def _remove_entry(
         self,
@@ -124,20 +157,30 @@ class SubscriptionIndex:
         self,
         node: _Node,
         parts: list[str],
-        idx: int,
-        matches: list[tuple[str, SubscriptionEntry]],
+        collect_to: list[tuple[str, SubscriptionEntry]],
+        idx: int = 0,
     ) -> None:
         if "#" in node.wildcard_children:
-            matches.extend(node.wildcard_children["#"].entries)
+            collect_to.extend(node.wildcard_children["#"].entries)
         if idx == len(parts):
-            matches.extend(node.entries)
+            collect_to.extend(node.entries)
             return
 
         part = parts[idx]
         if part in node.children:
-            self._collect(node.children[part], parts, idx + 1, matches)
+            self._collect(
+                node=node.children[part],
+                parts=parts,
+                idx=idx + 1,
+                collect_to=collect_to,
+            )
         if "+" in node.wildcard_children:
-            self._collect(node.wildcard_children["+"], parts, idx + 1, matches)
+            self._collect(
+                node=node.wildcard_children["+"],
+                parts=parts,
+                idx=idx + 1,
+                collect_to=collect_to,
+            )
 
     def _actual_filter(self, filter_: str, entry: SubscriptionEntry) -> str:
         return entry.actual_filter or filter_

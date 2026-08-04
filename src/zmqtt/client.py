@@ -20,8 +20,9 @@ from zmqtt._internal.packets.properties import (
 )
 from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.subscribe import SubscriptionRequest
-from zmqtt._internal.protocol import _DEFAULT_STRIPPED_PREFIXES, MQTTProtocol
+from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.state import SessionState
+from zmqtt._internal.topic_matching import _DEFAULT_STRIPPED_PREFIXES
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
 from zmqtt._internal.transport.tls import open_tls

@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Final, Literal, cast
 
+from zmqtt._internal import topic_matching
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
@@ -31,7 +32,6 @@ from zmqtt._internal.state import (
     SessionState,
     SubscriptionEntry,
 )
-from zmqtt._internal.topic_matching import _filter_specificity
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -44,37 +44,6 @@ from zmqtt.errors import (
 )
 
 log = logging.getLogger(__name__)
-
-
-# Group-less decorator prefixes the broker strips before delivery (unlike $SYS,
-# which it delivers on as-is). Extend via MQTTClient(stripped_prefixes=...).
-_DEFAULT_STRIPPED_PREFIXES: Final = ("$queue", "$exclusive")
-
-
-def _shared_filter_to_actual(filter_: str, stripped_prefixes: tuple[str, ...]) -> str:
-    """Return the filter the broker matches incoming PUBLISH topics against.
-
-    A shared/decorator subscription is sent with a prefix the broker strips before
-    delivery, so matching must run against the filter *without* it:
-
-    - ``$share/<group>/<filter>`` — MQTT 5 shared subscription (the only form that
-      carries a group), handled here directly;
-    - each entry in ``stripped_prefixes`` — a group-less decorator such as
-      ``$queue/<filter>`` or ``$exclusive/<filter>``.
-
-    Anything else — a plain filter, or a real namespace like ``$SYS/#`` the broker
-    delivers on unchanged — is returned untouched. The allowlist fails safe: an
-    unrecognised prefix is left as-is, so a mismatch surfaces as a loud
-    "No subscriber" rather than a silent mis-route.
-    """
-    if filter_.startswith("$share/"):
-        parts = filter_.split("/", 2)
-        if len(parts) == 3:
-            return parts[2]
-    for prefix in stripped_prefixes:
-        if filter_.startswith(f"{prefix}/"):
-            return filter_.split("/", 1)[1]
-    return filter_
 
 
 def _raise_on_rejected_filters(filters: list[SubscriptionRequest], suback: SubAck) -> None:
@@ -110,7 +79,7 @@ class MQTTProtocol:
         ping_timeout: float = 10.0,
         connect_timeout: float = 30.0,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
-        stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
+        stripped_prefixes: tuple[str, ...] = topic_matching._DEFAULT_STRIPPED_PREFIXES,
     ) -> None:
         self._transport = transport
         self._state = state
@@ -298,7 +267,7 @@ class MQTTProtocol:
                 new_entries[f] = SubscriptionEntry(
                     queue=asyncio.Queue(queue_maxsize),
                     auto_ack=auto_ack,
-                    actual_filter=_shared_filter_to_actual(f, self._stripped_prefixes),
+                    actual_filter=topic_matching._shared_filter_to_actual(f, self._stripped_prefixes),
                     subscription_identifier=subscription_identifier,
                 )
 
@@ -433,46 +402,14 @@ class MQTTProtocol:
                 msg = f"Unexpected packet from broker: {packet!r}"
                 raise MQTTProtocolError(msg)
 
-    def _select_recipient(
-        self,
-        publish: Publish,
-        *,
-        log_warnings: bool = True,
-    ) -> tuple[str, SubscriptionEntry] | None:
-        echoed = publish.properties.subscription_identifier if publish.properties else None
-        if echoed is not None:
-            identified = self._state.subscriptions.best_for_identifier(echoed, publish.topic)
-            if identified is not None:
-                return identified
-            if log_warnings:
-                log.warning(
-                    "No subscription with identifier %r for topic %r, falling back to filter matching",
-                    echoed,
-                    publish.topic,
-                )
-
-        matching = self._state.subscriptions.match(publish.topic)
-        if not matching:
-            return None
-
-        best_key = min(_filter_specificity(entry.actual_filter or filter_) for filter_, entry in matching)
-        winners = [
-            item
-            for item in matching
-            if _filter_specificity(item[1].actual_filter or item[0]) == best_key
-        ]
-        if len(winners) > 1 and log_warnings:
-            log.warning(
-                "Multiple equally-specific subscribers for %r: %s, delivering to first",
-                publish.topic,
-                [filter_ for filter_, _ in winners],
-            )
-        return winners[0]
-
     def _should_auto_ack(self, publish: Publish) -> bool:
         """Return True if the subscription selected for this PUBLISH uses auto-ack."""
-        recipient = self._select_recipient(publish, log_warnings=False)
-        return recipient is None or recipient[1].auto_ack
+        identifier = publish.properties.subscription_identifier if publish.properties else None
+        selection = self._state.subscriptions.select(
+            publish.topic,
+            subscription_identifier=identifier,
+        )
+        return selection.recipient is None or selection.recipient[1].auto_ack
 
     async def _handle_publish(self, packet: Publish) -> None:
         if packet.qos is QoS.AT_MOST_ONCE:
@@ -613,7 +550,25 @@ class MQTTProtocol:
         publish: Publish,
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
-        recipient = self._select_recipient(publish)
+        identifier = publish.properties.subscription_identifier if publish.properties else None
+        selection = self._state.subscriptions.select(
+            publish.topic,
+            subscription_identifier=identifier,
+        )
+        if selection.identifier_missing:
+            log.warning(
+                "No subscription with identifier %r for topic %r, falling back to filter matching",
+                identifier,
+                publish.topic,
+            )
+        if selection.tied_filters:
+            log.warning(
+                "Multiple equally-specific subscribers for %r: %s, delivering to first",
+                publish.topic,
+                list(selection.tied_filters),
+            )
+
+        recipient = selection.recipient
         if recipient is None:
             log.warning("No subscriber for topic %r", publish.topic)
             return

@@ -2,9 +2,10 @@ import asyncio
 
 import pytest
 
+from zmqtt import topic_matches
 from zmqtt._internal.state import SubscriptionEntry
 from zmqtt._internal.subscription_index import SubscriptionIndex
-from zmqtt._internal.topic_matching import _filter_specificity, _topic_matches
+from zmqtt._internal.topic_matching import _filter_specificity
 
 
 @pytest.mark.parametrize(
@@ -32,7 +33,28 @@ from zmqtt._internal.topic_matching import _filter_specificity, _topic_matches
     ],
 )
 def test_topic_matches(filter_: str, topic: str, expected: bool) -> None:
-    assert _topic_matches(filter_, topic) is expected
+    assert topic_matches(filter_, topic) is expected
+
+
+@pytest.mark.parametrize(
+    "filter_",
+    [
+        "$share/workers/sensors/+",
+        "$queue/sensors/+",
+        "$exclusive/sensors/+",
+    ],
+)
+def test_topic_matches_stripped_subscription_prefix(filter_: str) -> None:
+    assert topic_matches(filter_, "sensors/temperature")
+
+
+def test_topic_matches_custom_stripped_prefix() -> None:
+    assert topic_matches("$q/sensors/+", "sensors/temperature", stripped_prefixes=("$q",))
+    assert not topic_matches("$q/sensors/+", "sensors/temperature")
+
+
+def test_topic_matches_leaves_malformed_shared_filter_untouched() -> None:
+    assert not topic_matches("$share/workers", "workers")
 
 
 def test_filter_specificity_exact() -> None:
@@ -100,6 +122,12 @@ def test_subscription_index_keeps_original_filter_identity() -> None:
         "$share/group/demo/+/state",
         "demo/+/state",
     }
+    selection = index.select("demo/device/state")
+    assert selection.recipient == ("$share/group/demo/+/state", shared)
+    assert selection.tied_filters == (
+        "$share/group/demo/+/state",
+        "demo/+/state",
+    )
 
     index.remove("demo/+/state")
 
@@ -133,11 +161,28 @@ def test_subscription_index_routes_by_identifier() -> None:
         ("$share/group/demo/#", broad),
         ("$share/group/demo/+/state", exact),
     ]
-    assert index.best_for_identifier(7, "demo/device/state") == (
+    selection = index.select("demo/device/state", subscription_identifier=7)
+    assert selection.recipient == (
         "$share/group/demo/+/state",
         exact,
     )
-    assert index.best_for_identifier(999, "demo/device/state") is None
+    assert not selection.identifier_missing
+
+    fallback = index.select("demo/device/state", subscription_identifier=999)
+    assert fallback.recipient == ("$share/group/demo/+/state", exact)
+    assert fallback.identifier_missing
+    assert fallback.tied_filters == (
+        "$share/group/demo/+/state",
+        "demo/+/state",
+    )
+
+
+def test_subscription_index_select_returns_empty_result() -> None:
+    selection = SubscriptionIndex().select("missing/topic", subscription_identifier=9)
+
+    assert selection.recipient is None
+    assert selection.identifier_missing
+    assert selection.tied_filters == ()
 
 
 def test_subscription_index_clear_removes_all_lookups() -> None:

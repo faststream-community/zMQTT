@@ -1,4 +1,5 @@
 from zmqtt._internal.packets.properties import AuthProperties, ConnectProperties, PublishProperties
+from zmqtt._internal.topic_matching import topic_matches
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
 from zmqtt._internal.types.retain_handling import RetainHandling
@@ -40,4 +41,5 @@ __all__ = (
     "RetainHandling",
     "Subscription",
     "create_client",
+    "topic_matches",
 )
