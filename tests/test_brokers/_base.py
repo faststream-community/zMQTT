@@ -20,6 +20,7 @@ from zmqtt import (
     PublishProperties,
     QoS,
     ReconnectConfig,
+    RetainHandling,
     Subscription,
 )
 
@@ -110,6 +111,19 @@ class BrokerTestBase(abc.ABC):
             msg = await asyncio.wait_for(sub.get_message(), timeout=5.0)
 
         assert msg.payload == b"payload-qos2"
+
+    async def test_retain_handling_do_not_send(self, mqtt_client: MQTTClient, topic: str) -> None:
+        if self.version != "5.0":
+            pytest.skip("Retain handling requires MQTT 5.0")
+        await mqtt_client.publish(topic, b"retained", qos=QoS.AT_LEAST_ONCE, retain=True)
+
+        async with mqtt_client.subscribe(
+            topic,
+            qos=QoS.AT_LEAST_ONCE,
+            retain_handling=RetainHandling.DO_NOT_SEND,
+        ) as sub:
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
     async def test_subscribe_wildcard(
         self,

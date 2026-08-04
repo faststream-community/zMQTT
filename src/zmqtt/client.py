@@ -28,6 +28,7 @@ from zmqtt._internal.transport.tcp import open_tcp
 from zmqtt._internal.transport.tls import open_tls
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
+from zmqtt._internal.types.retain_handling import RetainHandling
 from zmqtt._internal.types.topic import validate_publish, validate_response_topic, validate_subscribe_topic
 from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTTimeoutError
 
@@ -139,6 +140,7 @@ class MQTTClientV5(Protocol):
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        retain_handling: RetainHandling = RetainHandling.SEND_ON_SUBSCRIBE,
     ) -> "Subscription": ...
 
     async def auth(self, method: str, data: bytes | None = None) -> None: ...
@@ -173,6 +175,7 @@ class Subscription:
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        retain_handling: RetainHandling = RetainHandling.SEND_ON_SUBSCRIBE,
         subscription_identifier: int | None = None,
     ) -> None:
         self._client = client
@@ -183,6 +186,7 @@ class Subscription:
         self._relay_tasks: list[asyncio.Task[None]] = []
         self._no_local = no_local
         self._retain_as_published = retain_as_published
+        self._retain_handling = retain_handling
         self._subscription_identifier = subscription_identifier
         self._registered_filters: list[str] = []
 
@@ -215,6 +219,7 @@ class Subscription:
                 qos=self._qos,
                 no_local=self._no_local,
                 retain_as_published=self._retain_as_published,
+                retain_handling=self._retain_handling,
             )
             for f in self._filters
         ]
@@ -493,6 +498,7 @@ class MQTTClient:
         receive_buffer_size: int = 1000,
         no_local: bool = False,
         retain_as_published: bool = False,
+        retain_handling: RetainHandling = RetainHandling.SEND_ON_SUBSCRIBE,
         subscription_identifier: int | None = None,
     ) -> Subscription:
         """Create a :class:`Subscription` for one or more topic filters.
@@ -518,6 +524,8 @@ class MQTTClient:
                 only).
             retain_as_published: Preserve the retain flag on forwarded messages
                 (MQTT 5.0 only).
+            retain_handling: Control when the broker sends retained messages for
+                this subscription (MQTT 5.0 only).
             subscription_identifier: Numeric identifier (1..268435455) sent in the
                 SUBSCRIBE properties (MQTT 5.0 only). The broker echoes it on every
                 PUBLISH this subscription causes: incoming messages are routed to
@@ -529,13 +537,14 @@ class MQTTClient:
             MQTTInvalidTopicError: If any filter is empty, has ``$`` in a non-leading
                 position, or contains a malformed wildcard (e.g. ``sensors#`` or
                 ``a/b#/c``).
-            RuntimeError: If *no_local* or *retain_as_published* are used on an
+            RuntimeError: If an MQTT 5.0-only subscription option is used on an
                 MQTT 3.1.1 connection.
         """
         for f in filters:
             validate_subscribe_topic(f)
-        if (no_local or retain_as_published) and self._version != "5.0":
-            msg = "no_local and retain_as_published require MQTT 5.0"
+        uses_v5_option = no_local or retain_as_published or retain_handling is not RetainHandling.SEND_ON_SUBSCRIBE
+        if uses_v5_option and self._version != "5.0":
+            msg = "no_local, retain_as_published, and retain_handling require MQTT 5.0"
             raise RuntimeError(msg)
         if subscription_identifier is not None:
             if self._version != "5.0":
@@ -552,6 +561,7 @@ class MQTTClient:
             receive_buffer_size,
             no_local,
             retain_as_published,
+            retain_handling,
             subscription_identifier,
         )
 
