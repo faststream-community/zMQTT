@@ -30,8 +30,8 @@ from zmqtt._internal.state import (
     OutboundQoS2State,
     QoS1Flight,
     SessionState,
-    SubscriptionEntry,
 )
+from zmqtt._internal.subscription_index import SubscriptionEntry, SubscriptionSelection
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -271,7 +271,7 @@ class MQTTProtocol:
                     subscription_identifier=subscription_identifier,
                 )
 
-        self._state.subscriptions.update(new_entries)
+        self._state.subscriptions.add_many(new_entries)
         future: asyncio.Future[SubAck] = loop.create_future()
         self._state.pending_subs[pid] = future
         properties = (
@@ -402,13 +402,18 @@ class MQTTProtocol:
                 msg = f"Unexpected packet from broker: {packet!r}"
                 raise MQTTProtocolError(msg)
 
+    def _select_subscription(self, publish: Publish) -> SubscriptionSelection:
+        identifier = publish.properties.subscription_identifier if publish.properties else None
+        if identifier is None:
+            return self._state.subscriptions.select(topic=publish.topic)
+        return self._state.subscriptions.select_by_identifier(
+            topic=publish.topic,
+            identifier=identifier,
+        )
+
     def _should_auto_ack(self, publish: Publish) -> bool:
         """Return True if the subscription selected for this PUBLISH uses auto-ack."""
-        identifier = publish.properties.subscription_identifier if publish.properties else None
-        selection = self._state.subscriptions.select(
-            publish.topic,
-            subscription_identifier=identifier,
-        )
+        selection = self._select_subscription(publish)
         return selection.recipient is None or selection.recipient[1].auto_ack
 
     async def _handle_publish(self, packet: Publish) -> None:
@@ -550,12 +555,9 @@ class MQTTProtocol:
         publish: Publish,
         ack_callback: Callable[[], Awaitable[None]] | None,
     ) -> None:
-        identifier = publish.properties.subscription_identifier if publish.properties else None
-        selection = self._state.subscriptions.select(
-            publish.topic,
-            subscription_identifier=identifier,
-        )
+        selection = self._select_subscription(publish)
         if selection.identifier_missing:
+            identifier = publish.properties.subscription_identifier if publish.properties else None
             log.warning(
                 "No subscription with identifier %r for topic %r, falling back to filter matching",
                 identifier,

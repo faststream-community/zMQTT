@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from tests.test_brokers._base import BrokerTestBase
 from zmqtt import MQTTClient, QoS, Subscription
 
@@ -13,7 +15,8 @@ class BaseTestEMQX(BrokerTestBase):
     ) -> None:
         for _ in range(n_duplicates):
             await sub.get_message()
-        assert sub._queue.empty()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
     async def test_queue_prefixed_subscription_receives(self, topic: str) -> None:
         """A ``$queue/<filter>`` subscription (EMQX's group-less shared subscription) must

@@ -7,7 +7,6 @@ from enum import Enum
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
 from zmqtt._internal.packets.subscribe import SubAck, UnsubAck
 from zmqtt._internal.subscription_index import SubscriptionIndex
-from zmqtt._internal.types.message import Message
 
 
 class PacketIdPool:
@@ -62,14 +61,6 @@ class InboundQoS2Flight:
     packet_id: int
     publish: Publish
     state: InboundQoS2State
-
-
-@dataclass(slots=True, kw_only=True)
-class SubscriptionEntry:
-    queue: asyncio.Queue[Message]
-    auto_ack: bool = True
-    actual_filter: str = ""  # filter with $share/<group>/ stripped; set on creation
-    subscription_identifier: int | None = None  # v5; echoed by the broker on PUBLISH
 
 
 class SessionState:

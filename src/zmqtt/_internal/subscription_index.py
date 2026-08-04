@@ -1,18 +1,23 @@
-from __future__ import annotations
-
+import asyncio
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from zmqtt._internal.topic_matching import _segment_rank, _topic_matches
+from zmqtt._internal.types.message import Message
 
-if TYPE_CHECKING:
-    from zmqtt._internal.state import SubscriptionEntry
+
+@dataclass(slots=True, kw_only=True)
+class SubscriptionEntry:
+    queue: asyncio.Queue[Message]
+    auto_ack: bool = True
+    actual_filter: str = ""  # filter with broker-stripped subscription decorators removed
+    subscription_identifier: int | None = None  # v5; echoed by the broker on PUBLISH
 
 
 @dataclass(slots=True)
 class _Node:
-    children: dict[str, _Node] = field(default_factory=dict)
-    wildcard_children: dict[str, _Node] = field(default_factory=dict)
+    children: dict[str, "_Node"] = field(default_factory=dict)
+    wildcard_children: dict[str, "_Node"] = field(default_factory=dict)
     entries: list[tuple[str, SubscriptionEntry]] = field(default_factory=list)
 
 
@@ -73,11 +78,8 @@ class SubscriptionIndex:
         self._entries.clear()
         self._by_identifier.clear()
 
-    def update(self, other: dict[str, SubscriptionEntry] | None = None, **kwargs: SubscriptionEntry) -> None:
-        if other is not None:
-            for filter_, entry in other.items():
-                self.add(filter_, entry)
-        for filter_, entry in kwargs.items():
+    def add_many(self, entries: Mapping[str, SubscriptionEntry]) -> None:
+        for filter_, entry in entries.items():
             self.add(filter_, entry)
 
     def match(self, topic: str) -> list[tuple[str, SubscriptionEntry]]:
@@ -96,37 +98,34 @@ class SubscriptionIndex:
     def by_identifier(self, identifier: int) -> list[tuple[str, SubscriptionEntry]]:
         return list(self._by_identifier.get(identifier, {}).items())
 
-    def select(
-        self,
-        topic: str,
-        *,
-        subscription_identifier: int | None = None,
-    ) -> SubscriptionSelection:
-        identifier_missing = False
-        if subscription_identifier is not None:
-            identified = self.by_identifier(subscription_identifier)
-            if identified:
-                matching = [item for item in identified if _topic_matches(self._actual_filter(*item), topic)]
-                return self._select_from(matching or identified)
-            identifier_missing = True
+    def select(self, topic: str) -> SubscriptionSelection:
+        return self._select_from(self.match(topic))
 
-        return self._select_from(self.match(topic), identifier_missing=identifier_missing)
+    def select_by_identifier(self, topic: str, identifier: int) -> SubscriptionSelection:
+        identified = self.by_identifier(identifier)
+        if identified:
+            matching = [item for item in identified if _topic_matches(self._actual_filter(*item), topic)]
+            return self._select_from(matching or identified)
+
+        fallback = self.select(topic)
+        return SubscriptionSelection(
+            recipient=fallback.recipient,
+            identifier_missing=True,
+            tied_filters=fallback.tied_filters,
+        )
 
     def _select_from(
         self,
         candidates: list[tuple[str, SubscriptionEntry]],
-        *,
-        identifier_missing: bool = False,
     ) -> SubscriptionSelection:
         if not candidates:
-            return SubscriptionSelection(recipient=None, identifier_missing=identifier_missing)
+            return SubscriptionSelection(recipient=None)
 
         best_key = min(self._specificity(self._actual_filter(*item)) for item in candidates)
         winners = [item for item in candidates if self._specificity(self._actual_filter(*item)) == best_key]
         tied_filters = tuple(filter_ for filter_, _ in winners) if len(winners) > 1 else ()
         return SubscriptionSelection(
             recipient=winners[0],
-            identifier_missing=identifier_missing,
             tied_filters=tied_filters,
         )
 

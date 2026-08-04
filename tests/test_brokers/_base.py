@@ -13,8 +13,15 @@ from typing import ClassVar, Literal
 
 import pytest
 
-from zmqtt import MQTTClient, QoS, ReconnectConfig, Subscription
-from zmqtt._internal.packets.properties import PublishProperties
+from zmqtt import (
+    MQTTClient,
+    MQTTDisconnectedError,
+    MQTTProtocolError,
+    PublishProperties,
+    QoS,
+    ReconnectConfig,
+    Subscription,
+)
 
 
 @pytest.mark.broker
@@ -40,6 +47,24 @@ class BrokerTestBase(abc.ABC):
             version=self.version,
         ) as client:
             yield client
+
+    async def trigger_session_takeover(self, *, client_id: str) -> None:
+        """Make the broker drop a connection by claiming its client identifier.
+
+        A losing MQTT 5 takeover can return DISCONNECT (0x8E) while the client
+        awaits CONNACK. MQTT 3.1.1 can only close the connection.
+        """
+        takeover_error = MQTTProtocolError if self.version == "5.0" else MQTTDisconnectedError
+
+        with contextlib.suppress(takeover_error):
+            async with MQTTClient(
+                self.host,
+                self.port,
+                client_id=client_id,
+                reconnect=ReconnectConfig(enabled=False),
+                version=self.version,
+            ):
+                pass
 
     async def test_ping(self, mqtt_client: MQTTClient) -> None:
         await mqtt_client.ping()
@@ -99,6 +124,80 @@ class BrokerTestBase(abc.ABC):
 
         assert {m.payload for m in msgs} == {b"w1", b"w2"}
         assert all(m.topic.startswith(prefix) for m in msgs)
+
+    async def test_unsubscribe_removes_only_exact_filter(
+        self,
+        mqtt_client: MQTTClient,
+        topic: str,
+    ) -> None:
+        wildcard = mqtt_client.subscribe(f"{topic}/+", qos=QoS.AT_LEAST_ONCE)
+        concrete = mqtt_client.subscribe(f"{topic}/concrete", qos=QoS.AT_LEAST_ONCE)
+        await wildcard.start()
+        await concrete.start()
+
+        await wildcard.stop()
+        await mqtt_client.publish(f"{topic}/concrete", b"exact-remains", qos=QoS.AT_LEAST_ONCE)
+
+        message = await asyncio.wait_for(concrete.get_message(), timeout=5.0)
+        assert message.payload == b"exact-remains"
+
+    async def test_unsubscribe_identifier_preserves_other_subscription(
+        self,
+        mqtt_client: MQTTClient,
+        topic: str,
+    ) -> None:
+        if self.version != "5.0":
+            pytest.skip("Subscription identifiers require MQTT 5.0")
+
+        concrete_topic = f"{topic}/concrete"
+        wildcard = mqtt_client.subscribe(
+            f"{topic}/+",
+            qos=QoS.AT_LEAST_ONCE,
+            subscription_identifier=1,
+        )
+        concrete = mqtt_client.subscribe(
+            concrete_topic,
+            qos=QoS.AT_LEAST_ONCE,
+            subscription_identifier=2,
+        )
+        await wildcard.start()
+        await concrete.start()
+
+        await wildcard.stop()
+        await mqtt_client.publish(concrete_topic, b"identifier-remains", qos=QoS.AT_LEAST_ONCE)
+
+        message = await asyncio.wait_for(concrete.get_message(), timeout=5.0)
+        await concrete.stop()
+        assert message.payload == b"identifier-remains"
+        assert message.properties is not None
+        assert message.properties.subscription_identifier == 2
+
+    async def test_resubscribe_same_filter_uses_new_subscription(
+        self,
+        mqtt_client: MQTTClient,
+        topic: str,
+    ) -> None:
+        topic_filter = f"{topic}/resubscribe"
+        first = mqtt_client.subscribe(
+            topic_filter,
+            qos=QoS.AT_LEAST_ONCE,
+            subscription_identifier=1 if self.version == "5.0" else None,
+        )
+        await first.start()
+        await first.stop()
+
+        async with mqtt_client.subscribe(
+            topic_filter,
+            qos=QoS.AT_LEAST_ONCE,
+            subscription_identifier=2 if self.version == "5.0" else None,
+        ) as second:
+            await mqtt_client.publish(topic_filter, b"resubscribed", qos=QoS.AT_LEAST_ONCE)
+            message = await asyncio.wait_for(second.get_message(), timeout=5.0)
+
+        assert message.payload == b"resubscribed"
+        if self.version == "5.0":
+            assert message.properties is not None
+            assert message.properties.subscription_identifier == 2
 
     async def test_message_ordering(self, mqtt_client: MQTTClient, topic: str) -> None:
         payloads = [str(i).encode() for i in range(5)]
@@ -186,30 +285,32 @@ class BrokerTestBase(abc.ABC):
         assert {m.properties.subscription_identifier for m in plain_msgs if m.properties} == {2}
 
     async def test_reconnect_subscription_survives(self, topic: str) -> None:
-        reconnect = ReconnectConfig(enabled=True, initial_delay=0.1, max_delay=1.0)
+        client_id = f"zmqtt-reconnect-{uuid.uuid4().hex[:8]}"
+        reconnect = ReconnectConfig(enabled=True, initial_delay=0.5, max_delay=1.0)
 
         async with (
             MQTTClient(
                 self.host,
                 self.port,
-                client_id=f"zmqtt-reconnect-{uuid.uuid4().hex[:8]}",
+                client_id=client_id,
                 reconnect=reconnect,
                 version=self.version,
             ) as client,
             client.subscribe(topic) as sub,
         ):
-            assert client._protocol is not None
-            await client._protocol._transport.close()
+            await self.trigger_session_takeover(client_id=client_id)
 
-            for _ in range(100):
-                await asyncio.sleep(0.05)
-                if client._protocol is not None and client._protocol._transport.is_connected:
-                    break
-            else:
-                pytest.fail("Client did not reconnect within 5 s")
-
-            await client.publish(topic, b"after-reconnect")
-            msg = await asyncio.wait_for(sub.get_message(), timeout=5.0)
+            async with MQTTClient(self.host, self.port, version=self.version) as publisher:
+                for _ in range(50):
+                    await publisher.publish(topic, b"after-reconnect")
+                    try:
+                        msg = await asyncio.wait_for(sub.get_message(), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        await asyncio.sleep(0.1)
+                    else:
+                        break
+                else:
+                    pytest.fail("Subscription did not recover within 10 s")
 
         assert msg.payload == b"after-reconnect"
 
@@ -227,7 +328,8 @@ class BrokerTestBase(abc.ABC):
             await mqtt_client.publish(f"{topic}/other", b"hit-wildcard")
             msg2 = await asyncio.wait_for(sub.get_message(), timeout=5.0)
             assert msg2.payload == b"hit-wildcard"
-            assert sub._queue.empty()
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
     async def test_overlapping_wildcard_plus_over_hash(
         self,
@@ -264,8 +366,8 @@ class BrokerTestBase(abc.ABC):
             await mqtt_client.publish(topic, b"bare-topic")
             msg = await asyncio.wait_for(sub.get_message(), timeout=5.0)
             assert msg.payload == b"bare-topic"
-            await asyncio.sleep(0.1)
-            assert sub._queue.empty()
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
     async def test_manual_ack_qos1(self, mqtt_client: MQTTClient, topic: str) -> None:
         async with mqtt_client.subscribe(

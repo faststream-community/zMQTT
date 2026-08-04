@@ -16,7 +16,8 @@ class BaseTestArtemis(BrokerTestBase):
     ) -> None:
         for _ in range(n_duplicates):
             await sub.get_message()
-        assert sub._queue.empty()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
     async def test_subscription_identifier_overlapping(self, topic: str) -> None:
         """Artemis supports subscription identifiers (a lone identified

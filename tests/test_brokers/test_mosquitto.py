@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from tests.test_brokers._base import BrokerTestBase
 from zmqtt import Subscription
 
@@ -11,7 +15,8 @@ class BaseTestMosquitto(BrokerTestBase):
     ) -> None:
         for _ in range(n_duplicates):
             await sub.get_message()
-        assert sub._queue.empty()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
 
 class TestMosquittoV311(BaseTestMosquitto):

@@ -1,3 +1,7 @@
+import asyncio
+
+import pytest
+
 from tests.test_brokers._base import BrokerTestBase
 from zmqtt import Subscription
 
@@ -9,7 +13,8 @@ class BaseTestHiveMQ(BrokerTestBase):
         sub: Subscription,
         n_duplicates: int,  # noqa: ARG002
     ) -> None:
-        assert sub._queue.empty()
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
 
 class TestHiveMQV311(BaseTestHiveMQ):

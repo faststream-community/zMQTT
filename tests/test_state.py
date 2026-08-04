@@ -13,8 +13,8 @@ from zmqtt._internal.state import (
     PacketIdPool,
     QoS1Flight,
     SessionState,
-    SubscriptionEntry,
 )
+from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.types.qos import QoS
 
 

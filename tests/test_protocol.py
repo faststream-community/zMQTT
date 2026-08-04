@@ -23,7 +23,8 @@ from zmqtt._internal.protocol import (
     MQTTProtocol,
     _raise_on_rejected_filters,
 )
-from zmqtt._internal.state import SessionState, SubscriptionEntry
+from zmqtt._internal.state import SessionState
+from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.topic_matching import _DEFAULT_STRIPPED_PREFIXES, _shared_filter_to_actual
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS

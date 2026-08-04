@@ -3,8 +3,7 @@ import asyncio
 import pytest
 
 from zmqtt import topic_matches
-from zmqtt._internal.state import SubscriptionEntry
-from zmqtt._internal.subscription_index import SubscriptionIndex
+from zmqtt._internal.subscription_index import SubscriptionEntry, SubscriptionIndex
 from zmqtt._internal.topic_matching import _filter_specificity
 
 
@@ -161,14 +160,14 @@ def test_subscription_index_routes_by_identifier() -> None:
         ("$share/group/demo/#", broad),
         ("$share/group/demo/+/state", exact),
     ]
-    selection = index.select("demo/device/state", subscription_identifier=7)
+    selection = index.select_by_identifier("demo/device/state", identifier=7)
     assert selection.recipient == (
         "$share/group/demo/+/state",
         exact,
     )
     assert not selection.identifier_missing
 
-    fallback = index.select("demo/device/state", subscription_identifier=999)
+    fallback = index.select_by_identifier("demo/device/state", identifier=999)
     assert fallback.recipient == ("$share/group/demo/+/state", exact)
     assert fallback.identifier_missing
     assert fallback.tied_filters == (
@@ -178,7 +177,7 @@ def test_subscription_index_routes_by_identifier() -> None:
 
 
 def test_subscription_index_select_returns_empty_result() -> None:
-    selection = SubscriptionIndex().select("missing/topic", subscription_identifier=9)
+    selection = SubscriptionIndex().select_by_identifier("missing/topic", identifier=9)
 
     assert selection.recipient is None
     assert selection.identifier_missing
@@ -199,3 +198,37 @@ def test_subscription_index_clear_removes_all_lookups() -> None:
     assert not index.contains("$share/group/demo/#")
     assert index.match("demo/device") == []
     assert index.by_identifier(3) == []
+
+
+def test_subscription_index_respects_system_topic_wildcard_boundary() -> None:
+    index = SubscriptionIndex()
+    root_hash = SubscriptionEntry(queue=asyncio.Queue(), actual_filter="#")
+    root_plus = SubscriptionEntry(queue=asyncio.Queue(), actual_filter="+/status")
+    system = SubscriptionEntry(queue=asyncio.Queue(), actual_filter="$SYS/#")
+    index.add("#", root_hash)
+    index.add("+/status", root_plus)
+    index.add("$SYS/#", system)
+
+    assert index.match("$SYS/status") == [("$SYS/#", system)]
+
+
+def test_subscription_index_replace_cleans_old_tree_and_identifier() -> None:
+    index = SubscriptionIndex()
+    old = SubscriptionEntry(
+        queue=asyncio.Queue(),
+        actual_filter="sensors/#",
+        subscription_identifier=1,
+    )
+    new = SubscriptionEntry(
+        queue=asyncio.Queue(),
+        actual_filter="devices/+",
+        subscription_identifier=2,
+    )
+    index.add("logical-filter", old)
+
+    index.add("logical-filter", new)
+
+    assert index.match("sensors/temperature") == []
+    assert index.match("devices/thermostat") == [("logical-filter", new)]
+    assert index.by_identifier(1) == []
+    assert index.by_identifier(2) == [("logical-filter", new)]
