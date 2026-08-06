@@ -26,11 +26,10 @@ concurrency:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   prepare:
-    name: Prepare release PR
+    name: Prepare release branch
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +70,7 @@ jobs:
           uv lock
           uv lock --check
 
-      - name: Create release pull request
+      - name: Create release branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
@@ -102,19 +101,15 @@ jobs:
             git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${release_branch}"
           fi
 
-          existing_pr=$(gh pr list \
-            --base master \
-            --head "$release_branch" \
-            --state open \
-            --json url \
-            --jq '.[0].url // ""')
-          if [[ -n "$existing_pr" ]]; then
-            echo "Release pull request already exists: ${existing_pr}"
-            exit 0
-          fi
-
-          gh pr create \
-            --base master \
-            --head "$release_branch" \
-            --title "chore: Prepare release ${tag}" \
-            --body "Automated release preparation for ${tag}. Review the version and changelog, then merge through the merge queue."
+          compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/master...${release_branch}?expand=1"
+          {
+            echo "## Release branch ready"
+            echo
+            echo "Open the release pull request manually:"
+            echo
+            echo "- Branch: ${release_branch}"
+            echo "- Compare: [${compare_url}](${compare_url})"
+            echo "- Suggested title: chore: Prepare release ${tag}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Release branch ready: ${release_branch}"
+          echo "Open pull request: ${compare_url}"
