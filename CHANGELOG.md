@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.1.0 (2026-08-07)
+
+### Chores
+
+- Release pipeline, dependabot, minor ci improvements
+  ([#37](https://github.com/faststream-community/zMQTT/pull/37),
+  [`89f163d`](https://github.com/faststream-community/zMQTT/commit/89f163d9d53bb1933e81a34f56ee3343ec71da95))
+
+### Continuous Integration
+
+- Fix prepare release step ([#42](https://github.com/faststream-community/zMQTT/pull/42),
+  [`e5c946f`](https://github.com/faststream-community/zMQTT/commit/e5c946f95bba64b36b97b6ae09aecdfd9cad0561))
+
+- Remove auto pull request on release ([#43](https://github.com/faststream-community/zMQTT/pull/43),
+  [`eab5a38`](https://github.com/faststream-community/zMQTT/commit/eab5a387aa97a98111d5d71dea11b9ca0c5f4340))
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#38](https://github.com/faststream-community/zMQTT/pull/38),
+  [`3ec531e`](https://github.com/faststream-community/zMQTT/commit/3ec531ebb95b269f0fd7c17b3747ad9a100e0d12))
+
+### Documentation
+
+- Correct ack, reconnect, and request semantics
+  ([#41](https://github.com/faststream-community/zMQTT/pull/41),
+  [`2370525`](https://github.com/faststream-community/zMQTT/commit/237052509c1fe8c70f2507e467d6dcbc627a092d))
+
+### Features
+
+- Add retain handling to public api ([#40](https://github.com/faststream-community/zMQTT/pull/40),
+  [`7065d7d`](https://github.com/faststream-community/zMQTT/commit/7065d7d6d67c01445351643970ce04fe9accbb83))
+
+- Implement correct request/response pattern using correlation data
+  ([#39](https://github.com/faststream-community/zMQTT/pull/39),
+  [`3ad58a4`](https://github.com/faststream-community/zMQTT/commit/3ad58a4fc167a77a38666f555d42b04731aad319))
+
+- Subscription trie ([#29](https://github.com/faststream-community/zMQTT/pull/29),
+  [`add3108`](https://github.com/faststream-community/zMQTT/commit/add310803d7cd732c80838c1e4cc43fd89483c35))
+
+
 ## v0.0.6 (2026-07-26)
 
 ### Bug Fixes
