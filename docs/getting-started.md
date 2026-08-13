@@ -32,7 +32,9 @@ async with create_client("broker.example.com", port=8883, tls=True) as client:
     ...
 ```
 
-See [Connecting](connecting.md) for all connection options — client ID, keepalive, credentials, TLS, and reconnection.
+See [Connecting](connecting.md) for all connection options — client ID,
+keepalive, credentials, TLS, reconnection, broker routing prefixes, and MQTT 5
+request concurrency.
 
 ## Publishing a message
 
@@ -78,3 +80,7 @@ Run a local broker first:
 ```bash
 docker compose up -d artemis
 ```
+
+Next, see [Subscribing](subscribing.md) for deterministic routing and
+[Request / Response](advanced/request-response.md) for the high-level MQTT 5
+request API.

@@ -7,7 +7,7 @@ MQTTError
   ├── MQTTConnectError      # CONNACK refused (return_code attribute)
   ├── MQTTProtocolError     # malformed or unexpected packet
   ├── MQTTDisconnectedError # connection lost unexpectedly
-  ├── MQTTTimeoutError      # ping or operation timed out
+  ├── MQTTTimeoutError      # PINGRESP or CONNACK timed out
   ├── MQTTSubscribeError    # one or more filters rejected by the broker
   └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
@@ -134,23 +134,25 @@ except MQTTInvalidTopicError as e:
     print(e)
 ```
 
-**`request()` — response topic rules:**
+**`request()` — request and response topic rules:**
 
-The `response_topic` property follows the same rules as a publish topic (no
-wildcards):
+The request topic and the `response_topic` property both follow the publish-topic
+rules. They are validated before zmqtt sends or subscribes to anything:
 
 ```python
-from zmqtt import MQTTInvalidTopicError, PublishProperties
+from zmqtt import MQTTInvalidTopicError
 
 try:
     await client.request(
-        "cmd",
+        "cmd/+",
         b"x",
-        properties=PublishProperties(response_topic="reply/+/bad"),
     )
 except MQTTInvalidTopicError as e:
     print(e)
 ```
+
+The same exception is raised for an invalid custom response topic such as
+`PublishProperties(response_topic="reply/+/bad")`.
 
 See [Request / Response](advanced/request-response.md) for details.
 

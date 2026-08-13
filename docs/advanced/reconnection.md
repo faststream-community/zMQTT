@@ -30,7 +30,9 @@ config = ReconnectConfig(
 | `backoff_factor` | `2.0` | Each failure multiplies the delay by this factor |
 | `max_attempts` | `5` | Total connection attempts before giving up. `None` retries indefinitely |
 
-With the defaults: 1 s → 2 s → 4 s → 8 s → … → 60 s, up to 5 total attempts.
+With the default limit of five total attempts, failed attempts are separated by
+delays of 1 s, 2 s, 4 s, and 8 s. With `max_attempts=None`, retries continue and
+the delay eventually caps at 60 s.
 
 ## Passing config to `create_client()`
 
@@ -47,6 +49,11 @@ async with create_client(
 ## How subscriptions survive reconnect
 
 Each `Subscription` is re-subscribed on the new connection automatically. The local message queue is preserved — messages that arrived before the disconnect are still in the queue and will be delivered to your code. New messages start flowing once the broker confirms the re-subscribe.
+
+This preserves the local subscription lifecycle, not every message published
+while the client was offline. Delivery during the gap depends on QoS and the
+broker-side session; durable redelivery requires the persistent-session settings
+described in [Manual Acknowledgement](manual-ack.md#connection-loss-before-ack).
 
 ## Disabling reconnection
 

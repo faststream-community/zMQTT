@@ -112,29 +112,40 @@ zmqtt manages the reply topic subscription, the `response_topic` /
 cancellation automatically. See [Request / Response](request-response.md)
 for the full API and responder example.
 
-## Enhanced authentication (`client.auth()`)
+## Low-level AUTH packet (`client.auth()`)
 
-Send an AUTH packet for extended authentication flows (e.g. SCRAM, Kerberos):
+Send one MQTT 5 AUTH packet with reason code `0x18` (Continue Authentication):
 
 ```python
 await client.auth("SCRAM-SHA-256", data=b"client-first-message")
 ```
 
-The `method` string is sent as the MQTT 5.0 `authentication_method` in the AUTH packet. This is an advanced feature — most applications do not need it.
+The `method` string is sent as `authentication_method`, and `data` as
+`authentication_data`. This call returns after writing the packet; it does not
+negotiate the method in CONNECT, wait for a broker AUTH response, or implement a
+multi-step mechanism such as SCRAM. Treat it as a low-level building block, not
+a complete enhanced-authentication flow.
 
-## CONNACK / DISCONNECT reason codes
+## CONNACK and DISCONNECT reason codes
 
-In MQTT 5.0, CONNACK and DISCONNECT packets carry a reason code. The library surfaces `MQTTConnectError` with `return_code` set to the CONNACK reason code on failure. Common 5.0 reason codes:
+In MQTT 5.0, CONNACK and DISCONNECT packets carry a reason code. A failed
+CONNACK becomes `MQTTConnectError`, whose `return_code` contains the broker's
+code. A broker-initiated DISCONNECT becomes `MQTTDisconnectedError`, with the
+reason code included in its message.
+
+Common failed-CONNACK reason codes are:
 
 | Code | Name |
 |------|------|
-| 0x00 | Success |
-| 0x04 | Disconnect with will message |
 | 0x80 | Unspecified error |
 | 0x81 | Malformed packet |
+| 0x84 | Unsupported protocol version |
+| 0x85 | Client identifier not valid |
+| 0x86 | Bad username or password |
 | 0x87 | Not authorised |
 | 0x88 | Server unavailable |
-| 0x8A | Bad authentication |
+| 0x8A | Banned |
+| 0x8C | Bad authentication method |
 
 See the [MQTT 5.0 spec](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html) for the full list.
 

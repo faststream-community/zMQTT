@@ -23,7 +23,7 @@ await client.publish("topic", b"\x00\x01\x02")  # raw bytes
 |-----|------|-----------|
 | `QoS.AT_MOST_ONCE` (0) | Fire-and-forget | Delivered at most once; no retries |
 | `QoS.AT_LEAST_ONCE` (1) | Confirmed | Delivered at least once; broker sends PUBACK |
-| `QoS.EXACTLY_ONCE` (2) | Exactly-once | Delivered exactly once; full PUBREC/PUBREL/PUBCOMP handshake |
+| `QoS.EXACTLY_ONCE` (2) | Protocol exactly-once | Full PUBREC/PUBREL/PUBCOMP handshake prevents duplicate protocol delivery within the MQTT session |
 
 ```python
 from zmqtt import QoS
@@ -32,6 +32,10 @@ await client.publish("cmd/device/restart", b"1", qos=QoS.AT_LEAST_ONCE)
 ```
 
 `QoS.AT_MOST_ONCE` is the default.
+
+QoS 2 does not make arbitrary application side effects exactly once. A process
+can still fail between changing application state and completing the MQTT
+handshake, so handlers that write to external systems should remain idempotent.
 
 ## Retain flag
 
@@ -46,8 +50,7 @@ await client.publish("status/service", "online", retain=True)
 When connected with `version="5.0"`, you can attach a `PublishProperties` object:
 
 ```python
-from zmqtt import create_client
-from zmqtt import PublishProperties
+from zmqtt import PublishProperties, create_client
 
 async with create_client("localhost", version="5.0") as client:
     props = PublishProperties(

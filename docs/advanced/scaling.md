@@ -4,7 +4,9 @@
 
 By default MQTT uses **fan-out**: every subscriber to a topic receives every message. If you run two workers subscribed to `jobs/#`, each message lands in both workers — work is duplicated.
 
-**Shared subscriptions** solve this. Clients join a named group, and the broker distributes each message to exactly one group member — standard round-robin load balancing with no application-level coordination.
+**Shared subscriptions** solve this. Clients join a named group, and the broker
+selects one group member for each message. The selection strategy is
+broker-specific; MQTT does not require round-robin distribution.
 
 ## Syntax
 
@@ -12,11 +14,11 @@ Subscribe to `$share/<group>/<topic>` instead of `<topic>` directly. The group n
 
 ```python
 import asyncio
-from zmqtt import MQTTClient, QoS
+from zmqtt import QoS, create_client
 
 
 async def worker(worker_id: int) -> None:
-    async with MQTTClient("broker.example.com") as client:
+    async with create_client("broker.example.com") as client:
         async with client.subscribe("$share/workers/jobs/#", qos=QoS.AT_LEAST_ONCE) as sub:
             async for msg in sub:
                 print(f"worker {worker_id} got {msg.topic}: {msg.payload}")
@@ -30,7 +32,7 @@ async def main() -> None:
 The publisher needs no changes:
 
 ```python
-async with MQTTClient("broker.example.com") as client:
+async with create_client("broker.example.com") as client:
     await client.publish("jobs/resize", b"image-42.jpg", qos=QoS.AT_LEAST_ONCE)
 ```
 
@@ -41,7 +43,7 @@ Some brokers provide group-less subscription prefixes in addition to the standar
 Use `stripped_prefixes` to support another prefix used by your broker. The tuple replaces the defaults, so include any default prefixes you still need:
 
 ```python
-client = MQTTClient(
+client = create_client(
     "broker.example.com",
     stripped_prefixes=("$queue", "$exclusive", "$q"),
 )
@@ -60,9 +62,16 @@ Do not add namespaces such as `$SYS` to `stripped_prefixes`: brokers publish tho
 
 ## QoS recommendation
 
-Use **QoS 1** (`AT_LEAST_ONCE`) or **QoS 2** (`EXACTLY_ONCE`) for shared subscriptions. With QoS 0 the broker makes no delivery guarantees; if the chosen worker disconnects mid-flight the message is silently dropped. QoS 1 ensures the message is redelivered to another group member on reconnect.
+Use **QoS 1** (`AT_LEAST_ONCE`) or **QoS 2** (`EXACTLY_ONCE`) when losing a
+message during worker failure is unacceptable. QoS 0 has no acknowledgement, so
+a delivery interrupted by disconnection can be lost. QoS 1/2 makes the delivery
+eligible for retry, but whether another group member receives it depends on the
+broker and persistent shared-subscription session.
 
-For strict exactly-once semantics use QoS 2 or handle idempotency at the application layer with QoS 1 and [manual ack](manual-ack.md).
+QoS 2 prevents duplicate protocol delivery within the MQTT session; it does not
+make external application side effects exactly once. Keep handlers idempotent,
+or combine QoS 1 with [manual acknowledgement](manual-ack.md) and an application
+deduplication key.
 
 ## Broker compatibility
 
@@ -94,7 +103,8 @@ All brokers supported by zmqtt's test suite accept the `$share/<group>/<topic>` 
 >
 > Other brokers tolerate the double slash, but NanoMQ disconnects the client immediately on SUBSCRIBE.
 
-Shared subscriptions are part of the MQTT 5.0 specification. Support in MQTT 3.1.1 is a broker extension — all major brokers have shipped it, but check your broker's release notes if you use an older version.
+Shared subscriptions are part of MQTT 5.0. On MQTT 3.1.1 they are a broker
+extension; check the broker's documentation.
 
 ---
 

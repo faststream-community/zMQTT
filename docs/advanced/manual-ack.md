@@ -1,6 +1,8 @@
 # Manual Acknowledgement
 
-By default, zmqtt acknowledges incoming messages automatically as soon as they are delivered to your queue. With `auto_ack=False` you take control: the broker-level ack is withheld until you explicitly call `msg.ack()`.
+By default, zmqtt advances the incoming QoS handshake automatically before it
+exposes the delivery to application code. With `auto_ack=False` you take
+control: PUBACK or PUBREC is withheld until you explicitly call `msg.ack()`.
 
 ## Why use manual ack
 

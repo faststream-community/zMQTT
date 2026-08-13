@@ -1,5 +1,5 @@
-site_name: zmqtt
-site_description: Pure asyncio MQTT 3.1.1 / 5.0 client
+site_name: zMQTT
+site_description: Pure asyncio MQTT 3.1.1 and 5.0 driver
 site_url: https://faststream-community.github.io/zMQTT/
 repo_url: https://github.com/faststream-community/zMQTT
 theme:

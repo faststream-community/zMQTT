@@ -2,7 +2,8 @@
 
 ## `create_client()`
 
-`create_client()` is the preferred entry point. It returns a typed client object and accepts all connection parameters:
+`create_client()` is the preferred entry point. It returns a version-typed
+client object and accepts the public connection and routing parameters:
 
 ```python
 from zmqtt import create_client
@@ -18,7 +19,8 @@ client = create_client(
 )
 ```
 
-All parameters except `host` are keyword-only and have sensible defaults.
+`host` and `port` may be positional; the remaining parameters are keyword-only
+and have sensible defaults.
 
 ## Version selection
 
@@ -66,10 +68,17 @@ async with create_client("broker.example.com", port=8883, tls=ctx) as client:
 | `tls` | `False` | TLS configuration (see above) |
 | `reconnect` | `ReconnectConfig()` | Reconnection behaviour — see [Reconnection](advanced/reconnection.md) |
 | `mqtt_connect_timeout` | `30.0` | Seconds to wait for the broker's CONNACK before raising `MQTTTimeoutError` (must be `> 0`). Treated as retryable when reconnection is enabled. |
+| `transport_factory` | `None` | Optional low-level transport override, primarily for testing |
 | `session_expiry_interval` | `0` | MQTT 5.0 session expiry in seconds (ignored on 3.1.1) |
+| `stripped_prefixes` | `("$queue", "$exclusive")` | Broker subscription prefixes removed before local topic matching; `$share/<group>/` is always supported |
+| `max_pending_requests` | `1000` | Maximum concurrent MQTT 5 `request()` calls; additional calls wait before publishing |
 | `version` | `"3.1.1"` | Protocol version: `"3.1.1"` or `"5.0"` |
 
-See [Reconnection](advanced/reconnection.md) for `ReconnectConfig` options and [Error Handling](error-handling.md) for `MQTTConnectError` on refused connections.
+See [Reconnection](advanced/reconnection.md) for `ReconnectConfig`,
+[Scaling](advanced/scaling.md) for subscription-prefix matching, and
+[Request / Response](advanced/request-response.md) for request concurrency.
+[Error Handling](error-handling.md) covers `MQTTConnectError` on refused
+connections.
 
 ## Context manager lifecycle
 

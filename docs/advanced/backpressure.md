@@ -22,31 +22,40 @@ The library's read loop reads packets from the TCP stream and dispatches them. W
 4. The TCP receive buffer fills.
 5. The TCP stack signals backpressure to the broker via window size reduction.
 
-The result is end-to-end flow control: a slow consumer naturally slows the broker's publish rate without any explicit coordination code.
+The result is bounded client-side memory and flow control back to the broker
+connection. What happens beyond that connection is broker-specific: the broker
+may slow publishers, queue messages, or apply an overload policy. A bounded
+zmqtt queue alone does not guarantee that every upstream message is preserved.
 
 ## When to use it
 
 Use `receive_buffer_size` when:
 
 - Your message handler is slow (I/O-bound, database writes, etc.) and you want to bound memory usage.
-- You need guaranteed processing of every message without unbounded queue growth.
+- You need bounded in-process buffering and prefer slowing the connection to
+  growing memory without limit.
 - You are implementing a consumer that must apply backpressure to upstream producers.
 
 Set it to `0` (unbounded) when:
 
 - Message arrival rate is low or bounded.
-- You buffer messages yourself (e.g. writing to a database in batches).
-- You prefer to drop or log excess rather than slow the broker.
+- Another layer enforces a reliable upper bound on outstanding work.
+
+An unbounded queue does not drop or log excess messages; it keeps allocating
+memory. If dropping is part of your overload policy, implement that policy
+explicitly in application code.
 
 ## Request / response
 
-MQTT 5.0 request routing has a separate bound. `max_pending_requests` defaults
-to `1000` and limits how many `request()` futures can be registered at once.
-Calls above the limit wait before publishing, applying backpressure to the
-caller. Unmatched and late responses are never buffered.
+MQTT 5.0 request routing has a separate limit. `max_pending_requests` defaults
+to `1000` and caps the number of concurrent `request()` calls. Additional calls
+wait before publishing, applying backpressure to the caller. Every response is
+routed to a single recipient: a matching response completes only its request.
+An unmatched or late response follows normal routing and may be buffered by at
+most one regular `Subscription`; if none matches, it is discarded.
 
 !!! warning
-    Applying backpressure affects all topics multiplexed on the same TCP connection. A slow consumer on one `Subscription` will stall delivery to all other subscriptions on the same client. If you need independent flow control per topic, use separate clients.
+    Applying backpressure affects all topics multiplexed on the same TCP connection. A slow consumer on one `Subscription` will stall delivery to all other subscriptions on the same client. If you need independent flow control per topic, use separate clients or scale your application using shared subscriptions or emqs `$queue`.
 
 ---
 
