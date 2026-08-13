@@ -1,5 +1,10 @@
 # zmqtt
 
+[![PyPI version](https://img.shields.io/pypi/v/zmqtt.svg)](https://pypi.org/project/zmqtt/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/zmqtt?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/zmqtt)
+[![Tests](https://github.com/faststream-community/zMQTT/actions/workflows/tests.yaml/badge.svg?branch=master)](https://github.com/faststream-community/zMQTT/actions/workflows/tests.yaml)
+[![License](https://img.shields.io/pypi/l/zmqtt.svg)](https://github.com/faststream-community/zMQTT/blob/master/LICENSE)
+
 Pure asyncio MQTT 3.1.1 and 5.0 for Python 3.10+, with deterministic
 subscription routing, bounded queues, and correlation-safe request/response.
 
