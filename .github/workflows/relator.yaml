@@ -25,3 +25,19 @@ jobs:
           tg-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           tg-chat-id: ${{ vars.TELEGRAM_CHAT_ID }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+  notify-oss-board:
+    name: "Send Telegram notification to OSS board"
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issues' &&
+      (contains(github.event.issue.labels.*.name, 'good first issue') ||
+      github.event.label.name == 'help wanted')
+    steps:
+      - name: Send Telegram notification to OSS board
+        uses: reagento/relator@4b1531359edba1228db0906e8931b0da2aef69cd # v1.7.0
+        with:
+          tg-bot-token: ${{ secrets.TELEGRAM_TOKEN }}
+          tg-chat-id: ${{ vars.GFI_CHAT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          join-input-with-list: "1"
+          custom-labels: "faststream,zmqtt"
