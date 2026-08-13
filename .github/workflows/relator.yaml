@@ -36,7 +36,7 @@ jobs:
       - name: Send Telegram notification to OSS board
         uses: reagento/relator@4b1531359edba1228db0906e8931b0da2aef69cd # v1.7.0
         with:
-          tg-bot-token: ${{ secrets.TELEGRAM_TOKEN }}
+          tg-bot-token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           tg-chat-id: ${{ vars.GFI_CHAT }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           join-input-with-list: "1"
