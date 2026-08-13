@@ -2,13 +2,18 @@
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import Protocol, TypeAlias
 
-from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.types.message import Message
 from zmqtt.errors import MQTTDisconnectedError
 
 _RequestKey: TypeAlias = tuple[str, bytes]
+
+
+class _ResponseSubscriptionManager(Protocol):
+    async def add_response_observer(self, topic: str) -> None: ...
+
+    async def remove_response_observer(self, topic: str) -> None: ...
 
 
 @dataclass(slots=True)
@@ -19,13 +24,14 @@ class _PendingRequest:
     _dispatcher: "_RequestDispatcher"
     _key: _RequestKey
     _closed: bool = field(default=False, init=False)
+    claimed: bool = field(default=False, init=False)
 
     async def close(self) -> None:
         if self._closed:
             return
         self._closed = True
         try:
-            await self._dispatcher.unregister(self._key, self.future)
+            await self._dispatcher.unregister(self._key, self)
         finally:
             if self.future.done() and not self.future.cancelled():
                 self.future.exception()
@@ -39,12 +45,26 @@ class _TopicInterest:
     ready: asyncio.Task[None] | None = None
 
 
+@dataclass(slots=True)
+class _ClaimedResponse:
+    """A response reserved for one pending request on one connection."""
+
+    dispatcher: "_RequestDispatcher"
+    pending: _PendingRequest
+    key: _RequestKey
+    message: Message
+    generation: int
+
+    def deliver(self) -> None:
+        self.dispatcher.complete(self)
+
+
 class _RequestDispatcher:
-    """Route responses to request futures without consuming subscription queues.
+    """Route matching responses exclusively to request futures.
 
     Only active waiters are retained. Incoming messages without a matching
-    waiter are never buffered, so late and unsolicited responses cannot grow
-    dispatcher state.
+    waiter are not buffered here and remain available to ordinary subscription
+    routing, so late and unsolicited responses cannot grow dispatcher state.
     """
 
     def __init__(self, max_pending_requests: int) -> None:
@@ -52,17 +72,21 @@ class _RequestDispatcher:
             msg = "max_pending_requests must be positive"
             raise ValueError(msg)
         self._capacity = asyncio.Semaphore(max_pending_requests)
-        self._pending: dict[_RequestKey, asyncio.Future[Message]] = {}
+        self._pending: dict[_RequestKey, _PendingRequest] = {}
         self._topics: dict[str, _TopicInterest] = {}
-        self._protocol: MQTTProtocol | None = None
+        self._protocol: _ResponseSubscriptionManager | None = None
+        self._generation = 0
 
     @property
     def pending_count(self) -> int:
         return len(self._pending)
 
-    def bind(self, protocol: MQTTProtocol) -> None:
+    def bind(self, protocol: _ResponseSubscriptionManager) -> None:
         """Bind the dispatcher to the current connection's protocol engine."""
         self._protocol = protocol
+        self._generation += 1
+        for pending in self._pending.values():
+            pending.claimed = False
         for interest in self._topics.values():
             interest.ready = None
 
@@ -76,7 +100,7 @@ class _RequestDispatcher:
         """Register a bounded response waiter before its request is published."""
         await self._capacity.acquire()
         key = (topic, correlation_data)
-        future: asyncio.Future[Message] | None = None
+        pending: _PendingRequest | None = None
         registered = False
         try:
             self._ensure_unique(key)
@@ -87,48 +111,66 @@ class _RequestDispatcher:
                 interest = _TopicInterest()
                 self._topics[topic] = interest
 
-            future = asyncio.get_running_loop().create_future()
-            self._pending[key] = future
-            interest.refcount += 1
-            await asyncio.shield(self._ensure_topic_ready(topic, interest))
-            registered = True
-            return _PendingRequest(
-                future=future,
+            pending = _PendingRequest(
+                future=asyncio.get_running_loop().create_future(),
                 _dispatcher=self,
                 _key=key,
             )
+            self._pending[key] = pending
+            interest.refcount += 1
+            await asyncio.shield(self._ensure_topic_ready(topic, interest))
+            registered = True
+            return pending
         finally:
             if not registered:
-                if future is None:
+                if pending is None:
                     self._capacity.release()
                 else:
-                    await self.unregister(key, future)
+                    await self.unregister(key, pending)
 
-    def dispatch(self, message: Message) -> None:
-        """Resolve a matching waiter without suppressing normal delivery."""
+    def claim(self, message: Message) -> _ClaimedResponse | None:
+        """Atomically reserve a matching waiter and return the claimed response."""
         properties = message.properties
         if properties is None or properties.correlation_data is None:
-            return
+            return None
 
-        future = self._pending.get((message.topic, properties.correlation_data))
-        if future is not None and not future.done():
-            future.set_result(message)
+        key = (message.topic, properties.correlation_data)
+        pending = self._pending.get(key)
+        if pending is None or pending.claimed or pending.future.done():
+            return None
+        pending.claimed = True
+        return _ClaimedResponse(
+            dispatcher=self,
+            pending=pending,
+            key=key,
+            message=message,
+            generation=self._generation,
+        )
+
+    def complete(self, response: _ClaimedResponse) -> None:
+        """Deliver a claimed response if it still belongs to this connection."""
+        if (
+            self._generation == response.generation
+            and self._pending.get(response.key) is response.pending
+            and not response.pending.future.done()
+        ):
+            response.pending.future.set_result(response.message)
 
     async def unregister(
         self,
         key: _RequestKey,
-        future: asyncio.Future[Message],
+        pending: _PendingRequest,
     ) -> None:
         """Remove one waiter and release its response-topic interest."""
         removed = False
         try:
-            if self._pending.get(key) is not future:
+            if self._pending.get(key) is not pending:
                 return
 
             removed = True
             del self._pending[key]
-            if not future.done():
-                future.cancel()
+            if not pending.future.done():
+                pending.future.cancel()
 
             topic = key[0]
             interest = self._topics[topic]
@@ -161,9 +203,10 @@ class _RequestDispatcher:
         self._pending.clear()
         self._topics.clear()
         self._protocol = None
-        for future in pending:
-            if not future.done():
-                future.set_exception(MQTTDisconnectedError("Client disconnected"))
+        self._generation += 1
+        for request in pending:
+            if not request.future.done():
+                request.future.set_exception(MQTTDisconnectedError("Client disconnected"))
             self._capacity.release()
         for task in ready_tasks:
             task.cancel()
@@ -177,7 +220,7 @@ class _RequestDispatcher:
             interest.ready = ready
         return ready
 
-    def _require_protocol(self) -> MQTTProtocol:
+    def _require_protocol(self) -> _ResponseSubscriptionManager:
         if self._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)

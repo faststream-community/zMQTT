@@ -6,6 +6,7 @@ from enum import Enum
 
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
 from zmqtt._internal.packets.subscribe import SubAck, UnsubAck
+from zmqtt._internal.routing import InboundRecipient
 from zmqtt._internal.subscription_index import SubscriptionIndex
 
 
@@ -59,8 +60,9 @@ class InboundQoS2State(Enum):
 @dataclass(slots=True)
 class InboundQoS2Flight:
     packet_id: int
-    publish: Publish
+    recipient: InboundRecipient
     state: InboundQoS2State
+    delivered: bool = False
 
 
 class SessionState:

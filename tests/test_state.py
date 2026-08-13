@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish
+from zmqtt._internal.routing import InboundRecipient
 from zmqtt._internal.state import (
     InboundQoS2Flight,
     InboundQoS2State,
@@ -15,6 +16,7 @@ from zmqtt._internal.state import (
     SessionState,
 )
 from zmqtt._internal.subscription_index import SubscriptionEntry
+from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
 
 
@@ -104,20 +106,40 @@ def test_outbound_qos2_initial_state() -> None:
 
 
 def test_inbound_qos2_flight_fields() -> None:
-    publish = Publish(
+    recipient = InboundRecipient(
+        message=Message(
+            topic="t",
+            payload=b"x",
+            qos=QoS.EXACTLY_ONCE,
+            retain=False,
+        ),
+    )
+    flight = InboundQoS2Flight(
+        packet_id=3,
+        recipient=recipient,
+        state=InboundQoS2State.PENDING_PUBREL,
+    )
+    assert flight.state is InboundQoS2State.PENDING_PUBREL
+    assert flight.recipient is recipient
+    assert flight.delivered is False
+
+
+def test_inbound_recipient_uses_subscription_ack_policy() -> None:
+    message = Message(
         topic="t",
         payload=b"x",
         qos=QoS.EXACTLY_ONCE,
         retain=False,
-        dup=False,
-        packet_id=3,
     )
-    flight = InboundQoS2Flight(
-        packet_id=3,
-        publish=publish,
-        state=InboundQoS2State.PENDING_PUBREL,
+    manual = SubscriptionEntry(
+        queue=asyncio.Queue(),
+        auto_ack=False,
     )
-    assert flight.state is InboundQoS2State.PENDING_PUBREL
+    assert not InboundRecipient(
+        message=message,
+        subscription=("t", manual),
+    ).auto_ack
+    assert InboundRecipient(message=message).auto_ack
 
 
 def test_session_state_starts_empty() -> None:

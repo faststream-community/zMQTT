@@ -16,7 +16,7 @@ from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.properties import PublishProperties
-from zmqtt._internal.packets.publish import PubAck, Publish
+from zmqtt._internal.packets.publish import PubAck, Publish, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import SubAck, Subscribe, SubscriptionRequest
 from zmqtt._internal.protocol import (
@@ -65,6 +65,33 @@ class FakeTransport:
     @property
     def is_connected(self) -> bool:
         return not self._closed
+
+
+class FakeRequestClaim:
+    def __init__(self, message: Message, observed: list[Message]) -> None:
+        self._message = message
+        self._observed = observed
+
+    def deliver(self) -> None:
+        self._observed.append(self._message)
+
+
+class FakeRequestRouter:
+    def __init__(
+        self,
+        observed: list[Message],
+        correlation_data: bytes | None = None,
+    ) -> None:
+        self._observed = observed
+        self._correlation_data = correlation_data
+
+    def claim(self, message: Message) -> FakeRequestClaim | None:
+        properties = message.properties
+        if self._correlation_data is not None and (
+            properties is None or properties.correlation_data != self._correlation_data
+        ):
+            return None
+        return FakeRequestClaim(message, self._observed)
 
 
 def make_protocol(
@@ -145,11 +172,12 @@ async def test_ping_timeout_raises() -> None:
 
 
 async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
-    """No matching subscription: warning logged, nothing delivered."""
+    """A response-topic interest does not suppress the no-recipient warning."""
     protocol, _ = make_protocol()
+    protocol._state.subscriptions.add_response_observer("unknown/topic")
 
     with caplog.at_level(logging.WARNING, logger="zmqtt.protocol"):
-        await protocol._deliver(
+        await protocol._handle_publish(
             Publish(
                 topic="unknown/topic",
                 payload=b"x",
@@ -157,7 +185,6 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
                 retain=False,
                 dup=False,
             ),
-            ack_callback=None,
         )
 
     assert "unknown/topic" in caplog.text
@@ -176,7 +203,7 @@ async def test_stripped_prefix_filter_receives_messages() -> None:
     )
     protocol._state.subscriptions.add("$queue/sensors/+/state", entry)
 
-    await protocol._deliver(
+    await protocol._handle_publish(
         Publish(
             topic="sensors/dev-1/state",
             payload=b"x",
@@ -184,7 +211,6 @@ async def test_stripped_prefix_filter_receives_messages() -> None:
             retain=False,
             dup=False,
         ),
-        ack_callback=None,
     )
 
     assert entry.queue.qsize() == 1
@@ -257,7 +283,7 @@ async def test_subscription_identifier_routes_delivery() -> None:
     protocol._state.subscriptions.add("demo/+/state", plain)
 
     for echoed, entry in ((1, shared), (2, plain)):
-        await protocol._deliver(
+        await protocol._handle_publish(
             Publish(
                 topic="demo/dev-1/state",
                 payload=b"x",
@@ -266,7 +292,6 @@ async def test_subscription_identifier_routes_delivery() -> None:
                 dup=False,
                 properties=PublishProperties(subscription_identifier=echoed),
             ),
-            ack_callback=None,
         )
         assert entry.queue.qsize() == 1
 
@@ -282,7 +307,7 @@ async def test_unknown_subscription_identifier_falls_back_to_topic_match(
     protocol._state.subscriptions.add("demo/#", entry)
 
     with caplog.at_level(logging.WARNING):
-        await protocol._deliver(
+        await protocol._handle_publish(
             Publish(
                 topic="demo/device/state",
                 payload=b"x",
@@ -291,14 +316,46 @@ async def test_unknown_subscription_identifier_falls_back_to_topic_match(
                 dup=False,
                 properties=PublishProperties(subscription_identifier=999),
             ),
-            ack_callback=None,
         )
 
     assert entry.queue.qsize() == 1
     assert "identifier 999" in caplog.text
 
 
-def test_subscription_identifier_selects_auto_ack_policy() -> None:
+async def test_matching_response_bypasses_regular_subscription() -> None:
+    response_topic = "demo/responses"
+    state = SessionState()
+    observed: list[Message] = []
+
+    protocol = MQTTProtocol(
+        FakeTransport(),
+        state,
+        version="5.0",
+        request_router=FakeRequestRouter(observed, b"expected"),
+    )
+    regular = SubscriptionEntry(queue=asyncio.Queue(), actual_filter=response_topic)
+    state.subscriptions.add(response_topic, regular)
+    state.subscriptions.add_response_observer(response_topic)
+
+    def response(payload: bytes, correlation_data: bytes) -> Publish:
+        return Publish(
+            topic=response_topic,
+            payload=payload,
+            qos=QoS.AT_MOST_ONCE,
+            retain=False,
+            dup=False,
+            properties=PublishProperties(correlation_data=correlation_data),
+        )
+
+    await protocol._handle_publish(response(b"matched", b"expected"))
+    await protocol._handle_publish(response(b"unmatched", b"unknown"))
+
+    assert [message.payload for message in observed] == [b"matched"]
+    assert (await regular.queue.get()).payload == b"unmatched"
+    assert regular.queue.empty()
+
+
+def test_recipient_selects_auto_ack_policy() -> None:
     protocol, _ = make_protocol()
     automatic = SubscriptionEntry(
         queue=asyncio.Queue(),
@@ -326,8 +383,15 @@ def test_subscription_identifier_selects_auto_ack_policy() -> None:
             properties=PublishProperties(subscription_identifier=identifier),
         )
 
-    assert protocol._should_auto_ack(publish(1))
-    assert not protocol._should_auto_ack(publish(2))
+    assert protocol._select_recipient(publish(1)).auto_ack
+    assert not protocol._select_recipient(publish(2)).auto_ack
+
+    response_protocol = MQTTProtocol(
+        FakeTransport(),
+        protocol._state,
+        request_router=FakeRequestRouter([]),
+    )
+    assert response_protocol._select_recipient(publish(2)).auto_ack
 
 
 async def test_multi_filter_subscription_delivers_once_per_publish() -> None:
@@ -349,7 +413,7 @@ async def test_multi_filter_subscription_delivers_once_per_publish() -> None:
         entries[topic_filter] = entry
         protocol._state.subscriptions.add(f"$share/g/{topic_filter}", entry)
 
-    await protocol._deliver(
+    await protocol._handle_publish(
         Publish(
             topic="demo/dev-1/server/state/ack",
             payload=b"x",
@@ -358,7 +422,6 @@ async def test_multi_filter_subscription_delivers_once_per_publish() -> None:
             dup=False,
             properties=PublishProperties(subscription_identifier=1),
         ),
-        ack_callback=None,
     )
     sizes = {f: e.queue.qsize() for f, e in entries.items()}
     assert sum(sizes.values()) == 1  # once per subscription, not once per filter
@@ -501,7 +564,7 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
     )
     transport.feed(encode(publish, version="3.1.1"))
     read_task = await _run_read_loop(protocol)
-    await asyncio.wait_for(queue.get(), timeout=1.0)
+    message = await asyncio.wait_for(queue.get(), timeout=1.0)
 
     # Broker retransmits PUBLISH before app calls ack()
     transport.feed(
@@ -521,5 +584,10 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
 
     assert queue.empty()
     assert transport.sent == []  # no PUBREC for duplicate
+
+    await message.ack()
+    await protocol._handle_pubrel(PubRel(packet_id=11))
+
+    assert queue.empty()
 
     await _stop_task(read_task)

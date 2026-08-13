@@ -682,7 +682,7 @@ class MQTTClient:
             connect_timeout=self._mqtt_connect_timeout,
             version=self._version,
             stripped_prefixes=self._stripped_prefixes,
-            response_observer=self._request_dispatcher.dispatch,
+            request_router=self._request_dispatcher,
         )
         connect_props = None
         if self._version == "5.0":

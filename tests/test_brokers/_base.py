@@ -541,7 +541,12 @@ class BrokerTestBase(abc.ABC):
         assert first.payload == b"reply-first"
         assert second.payload == b"reply-second"
 
-    async def test_request_response_does_not_steal_from_regular_subscription(self, topic: str) -> None:
+    @pytest.mark.parametrize("response_qos", tuple(QoS))
+    async def test_matching_response_is_delivered_to_only_one_handler(
+        self,
+        topic: str,
+        response_qos: QoS,
+    ) -> None:
         if self.version != "5.0":
             return
 
@@ -551,77 +556,124 @@ class BrokerTestBase(abc.ABC):
             MQTTClient(self.host, self.port, version=self.version) as requester,
             MQTTClient(self.host, self.port, version=self.version) as responder,
             responder.subscribe(topic) as req_sub,
+            requester.subscribe(response_topic, qos=response_qos) as response_sub,
         ):
-            response_sub = requester.subscribe(response_topic)
-            await response_sub.start()
-
-            async def respond() -> None:
-                msg = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
-                assert msg.properties is not None
-                await responder.publish(
-                    response_topic,
-                    b"response",
-                    properties=PublishProperties(
-                        correlation_data=msg.properties.correlation_data,
-                    ),
-                )
-
-            responder_task = asyncio.create_task(respond())
-            reply = await requester.request(
-                topic,
-                b"request",
-                properties=PublishProperties(
-                    response_topic=response_topic,
-                    correlation_data=correlation_data,
-                ),
-                timeout=5.0,
-            )
-            regular = await asyncio.wait_for(response_sub.get_message(), timeout=5.0)
-            await responder_task
-
-            # The regular subscription still owns the topic after the
-            # request observer has left.
-            await responder.publish(response_topic, b"ordinary")
-            ordinary = await asyncio.wait_for(response_sub.get_message(), timeout=5.0)
-
-            request_seen = asyncio.Event()
-            send_response = asyncio.Event()
-
-            async def respond_after_regular_subscription_stops() -> None:
-                msg = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
-                assert msg.properties is not None
-                request_seen.set()
-                await send_response.wait()
-                await responder.publish(
-                    response_topic,
-                    b"response-after-stop",
-                    properties=PublishProperties(
-                        correlation_data=msg.properties.correlation_data,
-                    ),
-                )
-
-            responder_task = asyncio.create_task(respond_after_regular_subscription_stops())
             request_task = asyncio.create_task(
                 requester.request(
                     topic,
-                    b"request-after-stop",
+                    b"request",
                     properties=PublishProperties(
                         response_topic=response_topic,
-                        correlation_data=b"corr-after-stop",
+                        correlation_data=correlation_data,
                     ),
                     timeout=5.0,
                 ),
             )
-            await asyncio.wait_for(request_seen.wait(), timeout=5.0)
-            await response_sub.stop()
-            send_response.set()
-            reply_after_stop = await request_task
-            await responder_task
+            request = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+            assert request.properties is not None
+            await responder.publish(
+                response_topic,
+                b"response",
+                properties=PublishProperties(
+                    correlation_data=request.properties.correlation_data,
+                ),
+                qos=response_qos,
+            )
+            reply = await request_task
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(response_sub.get_message(), timeout=0.2)
 
         assert reply.payload == b"response"
-        assert regular.payload == b"response"
-        assert ordinary.payload == b"ordinary"
-        assert reply_after_stop.payload == b"response-after-stop"
+        assert reply.qos is response_qos
+
+    @pytest.mark.parametrize("response_qos", tuple(QoS))
+    async def test_unmatched_response_is_delivered_to_subscription(
+        self,
+        topic: str,
+        response_qos: QoS,
+    ) -> None:
+        if self.version != "5.0":
+            return
+
+        response_topic = topic + "/responses"
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            responder.subscribe(topic) as req_sub,
+            requester.subscribe(response_topic, qos=response_qos) as response_sub,
+        ):
+            request_task = asyncio.create_task(
+                requester.request(
+                    topic,
+                    b"request",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"request-correlation",
+                    ),
+                    timeout=5.0,
+                ),
+            )
+            request = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+            assert request.properties is not None
+            await responder.publish(
+                response_topic,
+                b"unmatched",
+                properties=PublishProperties(
+                    correlation_data=b"unknown-correlation",
+                ),
+                qos=response_qos,
+            )
+            unmatched = await asyncio.wait_for(response_sub.get_message(), timeout=5.0)
+            await responder.publish(
+                response_topic,
+                b"response",
+                properties=PublishProperties(
+                    correlation_data=request.properties.correlation_data,
+                ),
+                qos=response_qos,
+            )
+            reply = await request_task
+
+        assert unmatched.payload == b"unmatched"
+        assert unmatched.qos is response_qos
+        assert reply.payload == b"response"
+
+    async def test_request_survives_regular_subscription_stop(self, topic: str) -> None:
+        if self.version != "5.0":
+            return
+
+        response_topic = topic + "/responses"
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as requester,
+            MQTTClient(self.host, self.port, version=self.version) as responder,
+            responder.subscribe(topic) as req_sub,
+        ):
+            response_sub = requester.subscribe(response_topic)
+            await response_sub.start()
+            request_task = asyncio.create_task(
+                requester.request(
+                    topic,
+                    b"request",
+                    properties=PublishProperties(
+                        response_topic=response_topic,
+                        correlation_data=b"request-correlation",
+                    ),
+                    timeout=5.0,
+                ),
+            )
+            request = await asyncio.wait_for(req_sub.get_message(), timeout=5.0)
+            assert request.properties is not None
+            await response_sub.stop()
+            await responder.publish(
+                response_topic,
+                b"response-after-stop",
+                properties=PublishProperties(
+                    correlation_data=request.properties.correlation_data,
+                ),
+            )
+            reply = await request_task
+
+        assert reply.payload == b"response-after-stop"
 
     async def test_request_backpressure_delays_publish(self, topic: str) -> None:
         if self.version != "5.0":
