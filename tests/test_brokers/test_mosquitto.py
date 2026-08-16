@@ -53,6 +53,7 @@ class BaseTestMosquitto(BrokerTestBase):
                 will=will,
             ) as client,
         ):
+
             async def connection_restored() -> bool:
                 try:
                     await client.ping(timeout=0.2)
