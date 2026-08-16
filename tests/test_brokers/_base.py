@@ -7,6 +7,7 @@ Run with:  pytest -m broker
 import abc
 import asyncio
 import contextlib
+import ssl
 import uuid
 from collections.abc import AsyncGenerator
 from typing import ClassVar, Literal
@@ -26,6 +27,32 @@ from zmqtt import (
     Will,
     WillProperties,
 )
+
+
+class BrokerTransport:
+    def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._reader = reader
+        self._writer = writer
+
+    async def read(self, n: int) -> bytes:
+        data = await self._reader.read(n)
+        if not data:
+            msg = "Connection closed by remote"
+            raise MQTTDisconnectedError(msg)
+        return data
+
+    async def write(self, data: bytes) -> None:
+        self._writer.write(data)
+        await self._writer.drain()
+
+    async def close(self) -> None:
+        self._writer.close()
+        with contextlib.suppress(Exception):
+            await self._writer.wait_closed()
+
+    @property
+    def is_connected(self) -> bool:
+        return not self._writer.is_closing()
 
 
 @pytest.mark.broker
@@ -334,6 +361,19 @@ class BrokerTestBase(abc.ABC):
     async def test_last_will_survives_reconnect(self, topic: str) -> None:
         will_topic = f"{topic}/will"
         client_id = f"zmqtt-will-{uuid.uuid4().hex[:8]}"
+        transports: list[BrokerTransport] = []
+
+        async def transport_factory(
+            host: str,
+            port: int,
+            tls: ssl.SSLContext | bool | None,
+        ) -> BrokerTransport:
+            del tls
+            reader, writer = await asyncio.open_connection(host, port)
+            transport = BrokerTransport(reader, writer)
+            transports.append(transport)
+            return transport
+
         will_properties = WillProperties(content_type="text/plain") if self.version == "5.0" else None
         will = Will(
             topic=will_topic,
@@ -352,6 +392,7 @@ class BrokerTestBase(abc.ABC):
                 self.port,
                 client_id=client_id,
                 reconnect=reconnect,
+                transport_factory=transport_factory,
                 version=self.version,
                 will=will,
             ) as client,
@@ -371,11 +412,11 @@ class BrokerTestBase(abc.ABC):
                         pytest.fail("Client did not reconnect within 5 s")
                     await asyncio.sleep(0.05)
 
-            await self.trigger_session_takeover(client_id=client_id)
+            await transports[-1].close()
             first = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
             await wait_for_reconnect()
 
-            await self.trigger_session_takeover(client_id=client_id)
+            await transports[-1].close()
             second = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
             await wait_for_reconnect()
 
