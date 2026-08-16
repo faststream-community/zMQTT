@@ -47,7 +47,7 @@ jobs:
           --security-opt no-new-privileges:true
 
       nanomq:
-        image: emqx/nanomq@sha256:cf010e7b78981b051cdb833921207991daaf46dccce1ab12dd8d7ec433147161  # latest
+        image: emqx/nanomq:0.25.5@sha256:a03605fe4061452609e0cd89e4ac0c382dc5bb338319e712bb25b6d21a72ba0a
         ports:
           - 1887:1883
         options: >-
