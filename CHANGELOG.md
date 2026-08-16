@@ -2,6 +2,38 @@
 
 <!-- version list -->
 
+## v0.1.1 (2026-08-16)
+
+### Chores
+
+- **ci**: Add integration with the oss board
+  ([#49](https://github.com/faststream-community/zMQTT/pull/49),
+  [`80b8b07`](https://github.com/faststream-community/zMQTT/commit/80b8b07fea9f68ec75e0f619feadd14f4cff74f2))
+
+- **ci**: Fix token ([#50](https://github.com/faststream-community/zMQTT/pull/50),
+  [`5eb07c5`](https://github.com/faststream-community/zMQTT/commit/5eb07c521be504f8f73928c5f9c8ae80cd12de94))
+
+### Documentation
+
+- Actualize README and documentation ([#48](https://github.com/faststream-community/zMQTT/pull/48),
+  [`27fbda9`](https://github.com/faststream-community/zMQTT/commit/27fbda9f7a766f8b76f39791d2ae48046bb0e05a))
+
+- Add badges to readme ([#51](https://github.com/faststream-community/zMQTT/pull/51),
+  [`3083320`](https://github.com/faststream-community/zMQTT/commit/3083320d19eefffc826c5e36b70963143ad263f9))
+
+### Features
+
+- **client**: Expose Last Will configuration
+  ([#52](https://github.com/faststream-community/zMQTT/pull/52),
+  [`b71fd5c`](https://github.com/faststream-community/zMQTT/commit/b71fd5c7031713714b22d9bbdd58204c6ebf8806))
+
+### Refactoring
+
+- More explicit routing logic for responses and regular subscriptions
+  ([#46](https://github.com/faststream-community/zMQTT/pull/46),
+  [`fe1bee6`](https://github.com/faststream-community/zMQTT/commit/fe1bee646c3df7b50b36c78c0d69d8aed9c22ac3))
+
+
 ## v0.1.0 (2026-08-07)
 
 ### Chores
