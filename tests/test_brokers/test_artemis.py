@@ -4,7 +4,7 @@ import uuid
 import pytest
 
 from tests.test_brokers._base import BrokerTestBase
-from zmqtt import MQTTClient, QoS, Subscription
+from zmqtt import MQTTClient, QoS, ReconnectConfig, Subscription, Will, WillProperties
 
 
 class BaseTestArtemis(BrokerTestBase):
@@ -19,8 +19,43 @@ class BaseTestArtemis(BrokerTestBase):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
-    async def test_last_will(self, topic: str) -> None:  # noqa: ARG002
-        pytest.skip("Artemis does not publish a Will on session takeover")
+    async def test_last_will(self, topic: str) -> None:
+        """
+        Unlike other brokers, Artemis doen`t read other client_id takeover as unexpected reconnect
+        so this test uses direct closing underlying tcp connection.
+        Will properties aren`t supported by Artemis.
+        Also Artemis steals will props for now. fix: https://github.com/apache/artemis/pull/6616
+        """
+        will_topic = f"{topic}/will"
+        client_id = f"zmqtt-will-{uuid.uuid4().hex[:8]}"
+        will_properties = WillProperties(content_type="text/plain") if self.version == "5.0" else None
+        will = Will(
+            topic=will_topic,
+            payload=b"offline",
+            qos=QoS.AT_LEAST_ONCE,
+            retain=False,
+            properties=will_properties,
+        )
+        victim = MQTTClient(
+            self.host,
+            self.port,
+            client_id=client_id,
+            reconnect=ReconnectConfig(enabled=False),
+            version=self.version,
+            will=will,
+        )
+
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as observer,
+            observer.subscribe(will_topic, qos=QoS.AT_LEAST_ONCE) as subscription,
+            victim,
+        ):
+            await victim._protocol._transport.close()  # type: ignore[union-attr]
+            message = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
+
+        assert message.topic == will_topic
+        assert message.payload == b"offline"
+        assert message.qos is QoS.AT_LEAST_ONCE
 
     async def test_subscription_identifier_overlapping(self, topic: str) -> None:
         """Artemis supports subscription identifiers (a lone identified
