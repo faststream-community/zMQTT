@@ -6,7 +6,7 @@ from collections import deque
 
 import pytest
 
-from zmqtt import MQTTClient, MQTTTimeoutError, ReconnectConfig, create_client
+from zmqtt import MQTTClient, MQTTTimeoutError, QoS, ReconnectConfig, Will, WillProperties, create_client
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck
 from zmqtt._internal.transport.base import Transport
@@ -21,6 +21,32 @@ def test_mqtt_connect_timeout_default_is_30s() -> None:
 def test_non_positive_mqtt_connect_timeout_raises(bad: float) -> None:
     with pytest.raises(ValueError, match="mqtt_connect_timeout must be positive"):
         create_client("localhost", mqtt_connect_timeout=bad)
+
+
+def test_create_client_accepts_will() -> None:
+    will = Will(
+        topic="status/client",
+        payload=b"offline",
+        qos=QoS.AT_LEAST_ONCE,
+        retain=True,
+    )
+
+    client = create_client("localhost", will=will)
+
+    assert isinstance(client, MQTTClient)
+
+
+def test_mqtt_v311_rejects_will_properties() -> None:
+    will = Will(
+        topic="status/client",
+        payload=b"offline",
+        qos=QoS.AT_LEAST_ONCE,
+        retain=True,
+        properties=WillProperties(content_type="text/plain"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"will properties require MQTT 5\.0"):
+        MQTTClient("localhost", version="3.1.1", will=will)
 
 
 class FakeTransport:

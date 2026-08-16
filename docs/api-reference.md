@@ -51,6 +51,10 @@
     options:
       show_source: false
 
+::: zmqtt.Will
+    options:
+      show_source: false
+
 ## Utilities
 
 ::: zmqtt.topic_matches
@@ -78,6 +82,10 @@
       show_source: false
 
 ::: zmqtt.AuthProperties
+    options:
+      show_source: false
+
+::: zmqtt.WillProperties
     options:
       show_source: false
 

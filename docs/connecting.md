@@ -22,6 +22,49 @@ client = create_client(
 `host` and `port` may be positional; the remaining parameters are keyword-only
 and have sensible defaults.
 
+## Last Will
+
+Configure the message the broker publishes when the client connection closes
+unexpectedly with `Will`:
+
+```python
+from zmqtt import QoS, Will, create_client
+
+client = create_client(
+    "broker.example.com",
+    will=Will(
+        topic="devices/device-42/status",
+        payload=b"offline",
+        qos=QoS.AT_LEAST_ONCE,
+        retain=True,
+    ),
+)
+```
+
+MQTT 5.0 clients can attach `WillProperties`:
+
+```python
+from zmqtt import QoS, Will, WillProperties, create_client
+
+client = create_client(
+    "broker.example.com",
+    version="5.0",
+    will=Will(
+        topic="devices/device-42/status",
+        payload=b"offline",
+        qos=QoS.AT_LEAST_ONCE,
+        retain=True,
+        properties=WillProperties(
+            will_delay_interval=10,
+            content_type="text/plain",
+        ),
+    ),
+)
+```
+
+The Will configuration is reused on automatic reconnection. Supplying
+`WillProperties` to an MQTT 3.1.1 client raises `RuntimeError`.
+
 ## Version selection
 
 Pass `version="3.1.1"` (default) or `version="5.0"`:
@@ -65,6 +108,7 @@ async with create_client("broker.example.com", port=8883, tls=ctx) as client:
 | `clean_session` | `True` | Discard broker-side session on connect |
 | `username` | `None` | MQTT username |
 | `password` | `None` | MQTT password |
+| `will` | `None` | Last Will published after an unexpected connection loss |
 | `tls` | `False` | TLS configuration (see above) |
 | `reconnect` | `ReconnectConfig()` | Reconnection behaviour — see [Reconnection](advanced/reconnection.md) |
 | `mqtt_connect_timeout` | `30.0` | Seconds to wait for the broker's CONNACK before raising `MQTTTimeoutError` (must be `> 0`). Treated as retryable when reconnection is enabled. |

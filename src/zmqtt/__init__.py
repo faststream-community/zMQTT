@@ -1,4 +1,5 @@
-from zmqtt._internal.packets.properties import AuthProperties, ConnectProperties, PublishProperties
+from zmqtt._internal.packets.connect import Will
+from zmqtt._internal.packets.properties import AuthProperties, ConnectProperties, PublishProperties, WillProperties
 from zmqtt._internal.topic_matching import topic_matches
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -40,6 +41,8 @@ __all__ = (
     "ReconnectConfig",
     "RetainHandling",
     "Subscription",
+    "Will",
+    "WillProperties",
     "create_client",
     "topic_matches",
 )

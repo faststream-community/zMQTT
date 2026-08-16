@@ -12,7 +12,7 @@ from typing import Final, Literal, Protocol, overload
 
 from zmqtt._internal._compat import Self, defer_cancellation
 from zmqtt._internal.packets.auth import Auth
-from zmqtt._internal.packets.connect import Connect
+from zmqtt._internal.packets.connect import Connect, Will
 from zmqtt._internal.packets.properties import (
     AuthProperties,
     ConnectProperties,
@@ -314,6 +314,7 @@ class MQTTClient:
         clean_session: bool = True,
         username: str | None = None,
         password: str | None = None,
+        will: Will | None = None,
         tls: ssl.SSLContext | bool | None = None,
         reconnect: ReconnectConfig | None = None,
         mqtt_connect_timeout: float = 30.0,
@@ -343,6 +344,8 @@ class MQTTClient:
                 existing session state on connect.
             username: Optional username for broker authentication.
             password: Optional plain-text password for broker authentication.
+            will: Last Will published by the broker if the connection closes
+                unexpectedly.
             tls: TLS configuration. Pass ``True`` for default TLS, an
                 :class:`ssl.SSLContext` for custom settings, or ``False`` (default)
                 for a plain TCP connection.
@@ -369,6 +372,9 @@ class MQTTClient:
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
             raise ValueError(msg)
+        if will is not None and will.properties is not None and version != "5.0":
+            msg = "will properties require MQTT 5.0"
+            raise RuntimeError(msg)
         self._host = host
         self._port = port
         self._client_id = client_id
@@ -376,6 +382,7 @@ class MQTTClient:
         self._clean_session = clean_session
         self._username = username
         self._password = password
+        self._will = will
         self._tls = tls
         self._reconnect = reconnect or ReconnectConfig()
         self._mqtt_connect_timeout = mqtt_connect_timeout
@@ -695,6 +702,7 @@ class MQTTClient:
             keepalive=self._keepalive,
             username=self._username,
             password=self._password.encode() if self._password is not None else None,
+            will=self._will,
             properties=connect_props,
         )
         try:
@@ -774,6 +782,7 @@ def create_client(
     clean_session: bool = ...,
     username: str | None = ...,
     password: str | None = ...,
+    will: Will | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
     mqtt_connect_timeout: float = ...,
@@ -793,6 +802,7 @@ def create_client(
     clean_session: bool = ...,
     username: str | None = ...,
     password: str | None = ...,
+    will: Will | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
     mqtt_connect_timeout: float = ...,
@@ -813,6 +823,7 @@ def create_client(
     clean_session: bool = ...,
     username: str | None = ...,
     password: str | None = ...,
+    will: Will | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
     mqtt_connect_timeout: float = ...,
@@ -832,6 +843,7 @@ def create_client(
     clean_session: bool = True,
     username: str | None = None,
     password: str | None = None,
+    will: Will | None = None,
     tls: ssl.SSLContext | bool = False,
     reconnect: ReconnectConfig | None = None,
     mqtt_connect_timeout: float = 30.0,
@@ -853,6 +865,7 @@ def create_client(
         clean_session=clean_session,
         username=username,
         password=password,
+        will=will,
         tls=tls,
         reconnect=reconnect,
         mqtt_connect_timeout=mqtt_connect_timeout,
