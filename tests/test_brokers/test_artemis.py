@@ -19,10 +19,6 @@ class BaseTestArtemis(BrokerTestBase):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
-    async def test_last_will_survives_reconnect(self, topic: str) -> None:
-        del topic
-        pytest.skip("Artemis does not publish a Will on session takeover")
-
     async def test_subscription_identifier_overlapping(self, topic: str) -> None:
         """Artemis supports subscription identifiers (a lone identified
         subscription gets its echo just fine) — what it does NOT share with the
