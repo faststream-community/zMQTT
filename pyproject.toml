@@ -44,6 +44,7 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.5",
     "semgrep>=1.156.0",
     "zizmor>=1.23.1",
@@ -78,7 +79,7 @@ ignore = ["D", "COM812", "TC001"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "--strict-markers"
+addopts = "--strict-markers -n auto"
 log_cli_level = "DEBUG"
 markers = [
     "broker: requires a live MQTT broker (run with --broker or docker compose up artemis)",
