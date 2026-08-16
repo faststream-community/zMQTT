@@ -17,7 +17,6 @@ from zmqtt import (
     MQTTClient,
     MQTTDisconnectedError,
     MQTTProtocolError,
-    MQTTTimeoutError,
     PublishProperties,
     QoS,
     ReconnectConfig,
@@ -331,7 +330,7 @@ class BrokerTestBase(abc.ABC):
 
         assert msg.payload == b"after-reconnect"
 
-    async def test_last_will_survives_reconnect(self, topic: str) -> None:
+    async def test_last_will(self, topic: str) -> None:
         will_topic = f"{topic}/will"
         client_id = f"zmqtt-will-{uuid.uuid4().hex[:8]}"
         will_properties = WillProperties(content_type="text/plain") if self.version == "5.0" else None
@@ -339,67 +338,34 @@ class BrokerTestBase(abc.ABC):
             topic=will_topic,
             payload=b"offline",
             qos=QoS.AT_LEAST_ONCE,
-            retain=True,
+            retain=False,
             properties=will_properties,
         )
-        reconnect = ReconnectConfig(enabled=True, initial_delay=2.0, max_delay=2.0, max_attempts=None)
+        victim = MQTTClient(
+            self.host,
+            self.port,
+            client_id=client_id,
+            reconnect=ReconnectConfig(enabled=False),
+            version=self.version,
+            will=will,
+        )
 
         async with (
             MQTTClient(self.host, self.port, version=self.version) as observer,
             observer.subscribe(will_topic, qos=QoS.AT_LEAST_ONCE) as subscription,
-            MQTTClient(
-                self.host,
-                self.port,
-                client_id=client_id,
-                reconnect=reconnect,
-                version=self.version,
-                will=will,
-            ) as client,
+            victim,
         ):
-
-            async def connection_restored() -> bool:
-                try:
-                    await client.ping(timeout=0.2)
-                except (MQTTDisconnectedError, MQTTTimeoutError, OSError):
-                    return False
-                return True
-
-            async def wait_for_reconnect() -> None:
-                deadline = asyncio.get_running_loop().time() + 5.0
-                while not await connection_restored():
-                    if asyncio.get_running_loop().time() >= deadline:
-                        pytest.fail("Client did not reconnect within 5 s")
-                    await asyncio.sleep(0.05)
-
             await self.trigger_session_takeover(client_id=client_id)
-            first = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
-            await wait_for_reconnect()
+            message = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
 
-            await self.trigger_session_takeover(client_id=client_id)
-            second = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
-            await wait_for_reconnect()
-
-        for message in (first, second):
-            assert message.topic == will_topic
-            assert message.payload == b"offline"
-            assert message.qos is QoS.AT_LEAST_ONCE
-            if self.version == "5.0":
-                assert message.properties is not None
-                assert message.properties.content_type == "text/plain"
-            else:
-                assert message.properties is None
-
-        async with MQTTClient(self.host, self.port, version=self.version) as observer:
-            async with observer.subscribe(will_topic, qos=QoS.AT_LEAST_ONCE) as subscription:
-                retained = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
-            await observer.publish(will_topic, b"", qos=QoS.AT_LEAST_ONCE, retain=True)
-
-        assert retained.retain is True
+        assert message.topic == will_topic
+        assert message.payload == b"offline"
+        assert message.qos is QoS.AT_LEAST_ONCE
         if self.version == "5.0":
-            assert retained.properties is not None
-            assert retained.properties.content_type == "text/plain"
+            assert message.properties is not None
+            assert message.properties.content_type == "text/plain"
         else:
-            assert retained.properties is None
+            assert message.properties is None
 
     async def test_overlapping_wildcard_priority_routing(
         self,

@@ -19,8 +19,7 @@ class BaseTestArtemis(BrokerTestBase):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
-    async def test_last_will_survives_reconnect(self, topic: str) -> None:
-        del topic
+    async def test_last_will(self, topic: str) -> None:  # noqa: ARG002
         pytest.skip("Artemis does not publish a Will on session takeover")
 
     async def test_subscription_identifier_overlapping(self, topic: str) -> None:
