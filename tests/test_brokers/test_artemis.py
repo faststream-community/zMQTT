@@ -19,6 +19,16 @@ class BaseTestArtemis(BrokerTestBase):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
+    async def test_message_ordering(
+        self,
+        mqtt_client: MQTTClient,  # noqa: ARG002
+        topic: str,  # noqa: ARG002
+    ) -> None:
+        """Artemis has a race condition that occasionally delivers QoS 1 messages
+        out of order, so this test flakes. Skip it while ordering is broken upstream.
+        """
+        pytest.skip("Artemis breaks message ordering: https://issues.apache.org/jira/browse/ARTEMIS-6191")
+
     async def test_last_will(self, topic: str) -> None:
         """
         Unlike other brokers, Artemis doen`t read other client_id takeover as unexpected reconnect
