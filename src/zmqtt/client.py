@@ -285,8 +285,30 @@ class Subscription:
         await self.__aexit__(None, None, None)
 
     async def get_message(self) -> Message:
-        """Wait for and return the next message from the subscription queue."""
-        return await self._queue.get()
+        """Wait for and return the next message from the subscription queue.
+
+        Raises:
+            Exception: The terminal error that stopped the client run loop.
+        """
+        failure_signal = self._client._subscription_failure
+        if failure_signal is None:
+            return await self._queue.get()
+        if failure_signal.done():
+            raise failure_signal.result()
+
+        message_task = asyncio.create_task(self._queue.get())
+        try:
+            done, _ = await asyncio.wait(
+                (message_task, failure_signal),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if failure_signal in done:
+                raise failure_signal.result()
+            return message_task.result()
+        finally:
+            if not message_task.done():
+                message_task.cancel()
+            await asyncio.gather(message_task, return_exceptions=True)
 
     def __aiter__(self) -> AsyncIterator[Message]:
         """Return self as the async iterator."""
@@ -394,12 +416,24 @@ class MQTTClient:
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
         self._run_task: asyncio.Task[None] | None = None
+        self._subscription_failure: asyncio.Future[BaseException] | None = None
 
     async def __aenter__(self) -> Self:
         """Connect to the broker and start the background run loop."""
         await self._connect_with_retry()
+        self._subscription_failure = asyncio.get_running_loop().create_future()
         self._run_task = asyncio.create_task(self._run_loop())
+        self._run_task.add_done_callback(self._notify_subscription_failure)
         return self
+
+    def _notify_subscription_failure(self, run_task: asyncio.Task[None]) -> None:
+        """Wake subscription consumers if the client run loop failed."""
+        if run_task.cancelled():
+            return
+        failure = run_task.exception()
+        signal = self._subscription_failure
+        if failure is not None and signal is not None and not signal.done():
+            signal.set_result(failure)
 
     async def __aexit__(self, *exc: object) -> None:
         """Disconnect cleanly and cancel the run loop."""

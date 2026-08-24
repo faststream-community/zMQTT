@@ -69,6 +69,12 @@ class BrokerTestBase(abc.ABC):
             ):
                 pass
 
+    async def force_tcp_disconnect(self, client: MQTTClient) -> None:
+        """Close the TCP connection without sending MQTT DISCONNECT."""
+        protocol = client._protocol
+        assert protocol is not None
+        await protocol._transport.close()
+
     async def test_ping(self, mqtt_client: MQTTClient) -> None:
         await mqtt_client.ping()
 
@@ -329,6 +335,47 @@ class BrokerTestBase(abc.ABC):
                     pytest.fail("Subscription did not recover within 10 s")
 
         assert msg.payload == b"after-reconnect"
+
+    async def test_subscription_survives_single_allowed_reconnect_attempt(self, topic: str) -> None:
+        client = MQTTClient(
+            self.host,
+            self.port,
+            client_id=f"zmqtt-single-reconnect-{uuid.uuid4().hex[:8]}",
+            reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=1),
+            version=self.version,
+        )
+
+        async with (
+            client,
+            client.subscribe(topic) as subscription,
+            MQTTClient(self.host, self.port, version=self.version) as publisher,
+        ):
+            message_task = asyncio.create_task(anext(subscription))
+            await asyncio.sleep(0)
+
+            await self.force_tcp_disconnect(client)
+            await asyncio.sleep(0.5)
+            await publisher.publish(topic, b"after-single-reconnect")
+            message = await message_task
+
+        assert message.payload == b"after-single-reconnect"
+
+    async def test_tcp_disconnect_wakes_subscription_when_reconnect_disabled(self, topic: str) -> None:
+        client = MQTTClient(
+            self.host,
+            self.port,
+            reconnect=ReconnectConfig(enabled=False),
+            version=self.version,
+        )
+
+        async with client, client.subscribe(topic) as subscription:
+            message_task = asyncio.create_task(anext(subscription))
+            await asyncio.sleep(0)
+
+            await self.force_tcp_disconnect(client)
+
+            with pytest.raises(MQTTDisconnectedError):
+                await asyncio.wait_for(message_task, timeout=5.0)
 
     async def test_last_will(self, topic: str) -> None:
         will_topic = f"{topic}/will"

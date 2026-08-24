@@ -50,7 +50,7 @@ class BaseTestArtemis(BrokerTestBase):
             observer.subscribe(will_topic, qos=QoS.AT_LEAST_ONCE) as subscription,
             victim,
         ):
-            await victim._protocol._transport.close()  # type: ignore[union-attr]
+            await self.force_tcp_disconnect(victim)
             message = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
 
         assert message.topic == will_topic
