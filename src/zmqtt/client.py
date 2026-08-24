@@ -339,6 +339,7 @@ class MQTTClient:
         will: Will | None = None,
         tls: ssl.SSLContext | bool | None = None,
         reconnect: ReconnectConfig | None = None,
+        on_connection_recovery_failed: Callable[[], Awaitable[None]] | None = None,
         mqtt_connect_timeout: float = 30.0,
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
@@ -373,6 +374,9 @@ class MQTTClient:
                 for a plain TCP connection.
             reconnect: Reconnection policy. Defaults to
                 :class:`ReconnectConfig` with exponential back-off enabled.
+            on_connection_recovery_failed: Async callback invoked once when a
+                connection that was established successfully cannot be restored.
+                Initial connection failures and clean disconnects do not invoke it.
             mqtt_connect_timeout: Seconds to wait for the broker's CONNACK during
                 the MQTT CONNECT/CONNACK handshake — distinct from the TCP socket
                 connect — before raising :exc:`MQTTTimeoutError`. Must be positive.
@@ -407,6 +411,7 @@ class MQTTClient:
         self._will = will
         self._tls = tls
         self._reconnect = reconnect or ReconnectConfig()
+        self._on_connection_recovery_failed = on_connection_recovery_failed
         self._mqtt_connect_timeout = mqtt_connect_timeout
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
@@ -792,6 +797,7 @@ class MQTTClient:
 
             except (MQTTDisconnectedError, MQTTTimeoutError):
                 if not self._reconnect.enabled:
+                    await self._notify_connection_recovery_failed()
                     raise
                 # Close the dead transport to release the file descriptor.
                 with contextlib.suppress(Exception):
@@ -801,8 +807,16 @@ class MQTTClient:
 
             subs_to_restore = list(self._subscriptions)
             log.warning("Connection lost, reconnecting...")
-            await self._connect_with_retry(wait_before_first_attempt=True)
+            try:
+                await self._connect_with_retry(wait_before_first_attempt=True)
+            except (MQTTConnectError, MQTTTimeoutError, OSError):
+                await self._notify_connection_recovery_failed()
+                raise
             log.info("Successfully reconnected")
+
+    async def _notify_connection_recovery_failed(self) -> None:
+        if self._on_connection_recovery_failed is not None:
+            await self._on_connection_recovery_failed()
 
 
 # No version= argument: defaults to "3.1.1", so the return type is MQTTClientV311.
@@ -819,6 +833,7 @@ def create_client(
     will: Will | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    on_connection_recovery_failed: Callable[[], Awaitable[None]] | None = ...,
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
@@ -839,6 +854,7 @@ def create_client(
     will: Will | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    on_connection_recovery_failed: Callable[[], Awaitable[None]] | None = ...,
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
@@ -860,6 +876,7 @@ def create_client(
     will: Will | None = ...,
     tls: ssl.SSLContext | bool = ...,
     reconnect: ReconnectConfig | None = ...,
+    on_connection_recovery_failed: Callable[[], Awaitable[None]] | None = ...,
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
@@ -880,6 +897,7 @@ def create_client(
     will: Will | None = None,
     tls: ssl.SSLContext | bool = False,
     reconnect: ReconnectConfig | None = None,
+    on_connection_recovery_failed: Callable[[], Awaitable[None]] | None = None,
     mqtt_connect_timeout: float = 30.0,
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
@@ -902,6 +920,7 @@ def create_client(
         will=will,
         tls=tls,
         reconnect=reconnect,
+        on_connection_recovery_failed=on_connection_recovery_failed,
         mqtt_connect_timeout=mqtt_connect_timeout,
         transport_factory=transport_factory,
         version=version,

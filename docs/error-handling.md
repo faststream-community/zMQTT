@@ -158,9 +158,15 @@ See [Request / Response](advanced/request-response.md) for details.
 
 ## Reconnection interaction
 
-When `ReconnectConfig(enabled=True)` (the default), the client reconnects with exponential backoff. An active `async for msg in sub` loop keeps waiting and resumes after the subscription is restored.
+When `ReconnectConfig(enabled=True)` (the default), the client reconnects with
+exponential backoff. An active `async for msg in sub` loop keeps waiting and
+resumes after the subscription is restored. If all attempts fail, the optional
+`on_connection_recovery_failed` callback is invoked once and active subscription
+iterators raise the terminal connection error.
 
-When reconnection is disabled, an active subscription iterator does not receive an exception by itself; it simply has no new messages to yield. Use application-level cancellation or timeouts when a consumer must stop after connectivity is lost. A later operation that requires a live connection raises `MQTTDisconnectedError`.
+When reconnection is disabled, active subscription iterators raise
+`MQTTDisconnectedError` after connectivity is lost. A later operation that
+requires a live connection raises the same error.
 
 Pending MQTT 5.0 requests have their own timeout and reconnect behaviour; see [Request / Response](advanced/request-response.md#connection-loss-and-reconnection).
 

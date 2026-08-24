@@ -46,6 +46,37 @@ async with create_client(
     ...
 ```
 
+## Handling failed connection recovery
+
+Use `on_connection_recovery_failed` when application code needs to observe that
+a running client cannot restore its connection:
+
+```python
+from zmqtt import ReconnectConfig, create_client
+
+
+async def connection_recovery_failed() -> None:
+    print("MQTT connection could not be restored")
+
+
+async with create_client(
+    "localhost",
+    reconnect=ReconnectConfig(max_attempts=5),
+    on_connection_recovery_failed=connection_recovery_failed,
+) as client:
+    ...
+```
+
+The async callback is awaited exactly once after a previously established
+connection cannot be restored. It is not called when the initial connection
+fails or when the client is disconnected cleanly. Initial connection failures
+still propagate from `connect()` or the async context manager entry.
+
+After the callback returns, the client stops reconnecting and the terminal
+connection error is propagated to active subscription iterators. Use the
+callback to notify the component that owns the client lifecycle when it needs
+to take further action.
+
 ## How subscriptions survive reconnect
 
 Each `Subscription` is re-subscribed on the new connection automatically. The local message queue is preserved — messages that arrived before the disconnect are still in the queue and will be delivered to your code. New messages start flowing once the broker confirms the re-subscribe.
@@ -67,7 +98,10 @@ async with create_client(
     ...
 ```
 
-With reconnection disabled, the client stops on the first connection loss. `MQTTDisconnectedError` is raised on the next call to `publish()`, `ping()`, or entering a new `subscribe()` context. An active `async for msg in sub` loop will hang once the connection drops — no further messages are delivered and no exception is raised from the iterator itself.
+With reconnection disabled, the client stops on the first connection loss and
+invokes `on_connection_recovery_failed`, if configured. `MQTTDisconnectedError`
+is raised on the next call to `publish()`, `ping()`, entering a new `subscribe()`
+context, or waiting for a message from an active subscription.
 
 ---
 

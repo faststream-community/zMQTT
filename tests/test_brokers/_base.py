@@ -377,6 +377,27 @@ class BrokerTestBase(abc.ABC):
             with pytest.raises(MQTTDisconnectedError):
                 await asyncio.wait_for(message_task, timeout=5.0)
 
+    async def test_on_connection_recovery_failed_called(self) -> None:
+        callback_calls = 0
+
+        async def on_connection_recovery_failed() -> None:
+            nonlocal callback_calls
+            callback_calls += 1
+
+        client = MQTTClient(
+            self.host,
+            self.port,
+            reconnect=ReconnectConfig(enabled=False),
+            on_connection_recovery_failed=on_connection_recovery_failed,
+            version=self.version,
+        )
+
+        async with client:
+            await self.force_tcp_disconnect(client)
+            await asyncio.sleep(0.5)
+
+        assert callback_calls == 1
+
     async def test_last_will(self, topic: str) -> None:
         will_topic = f"{topic}/will"
         client_id = f"zmqtt-will-{uuid.uuid4().hex[:8]}"

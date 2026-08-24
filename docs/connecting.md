@@ -111,6 +111,7 @@ async with create_client("broker.example.com", port=8883, tls=ctx) as client:
 | `will` | `None` | Last Will published after an unexpected connection loss |
 | `tls` | `False` | TLS configuration (see above) |
 | `reconnect` | `ReconnectConfig()` | Reconnection behaviour — see [Reconnection](advanced/reconnection.md) |
+| `on_connection_recovery_failed` | `None` | Async callback invoked once when a running connection cannot be restored |
 | `mqtt_connect_timeout` | `30.0` | Seconds to wait for the broker's CONNACK before raising `MQTTTimeoutError` (must be `> 0`). Treated as retryable when reconnection is enabled. |
 | `transport_factory` | `None` | Optional low-level transport override, primarily for testing |
 | `session_expiry_interval` | `0` | MQTT 5.0 session expiry in seconds (ignored on 3.1.1) |
