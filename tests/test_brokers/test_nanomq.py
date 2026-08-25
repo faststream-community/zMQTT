@@ -7,6 +7,8 @@ from zmqtt import Subscription
 
 
 class BaseTestNanoMQ(BrokerTestBase):
+    supports_persistent_sessions = False
+
     async def handle_sub_duplicates(
         self,
         *,

@@ -4,10 +4,11 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
-from typing import Final, Literal, cast
+from collections.abc import AsyncGenerator, Iterable
+from typing import Final, Literal
 
 from zmqtt._internal import topic_matching
+from zmqtt._internal.inbound import InboundPublishFlow
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
@@ -25,14 +26,12 @@ from zmqtt._internal.packets.subscribe import (
 )
 from zmqtt._internal.routing import InboundRecipient, RequestRouter
 from zmqtt._internal.state import (
-    InboundQoS2Flight,
-    InboundQoS2State,
     OutboundQoS2Flight,
     OutboundQoS2State,
     QoS1Flight,
     SessionState,
 )
-from zmqtt._internal.subscription_index import SubscriptionEntry, SubscriptionSelection
+from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -117,6 +116,8 @@ class MQTTProtocol:
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         stripped_prefixes: tuple[str, ...] = topic_matching._DEFAULT_STRIPPED_PREFIXES,
         request_router: RequestRouter | None = None,
+        session_replay_buffer_size: int = 1000,
+        session_replay_timeout: float = 30.0,
     ) -> None:
         self._transport = transport
         self._state = state
@@ -125,7 +126,13 @@ class MQTTProtocol:
         self._connect_timeout = connect_timeout
         self._version: Final = version
         self._stripped_prefixes = stripped_prefixes
-        self._request_router = request_router
+        self.inbound = InboundPublishFlow(
+            connection=self,
+            state=state,
+            request_router=request_router,
+            session_replay_buffer_size=session_replay_buffer_size,
+            session_replay_timeout=session_replay_timeout,
+        )
         self._buf = PacketBuffer(version=version)
         self._ping_waiters: list[asyncio.Future[None]] = []
         self._subscription_guards = _SubscriptionGuards()
@@ -140,7 +147,7 @@ class MQTTProtocol:
         ``connect_timeout`` seconds the connection is presumed dead and
         ``MQTTTimeoutError`` is raised (mirrors ``ping()``'s PINGRESP timeout).
         """
-        log.debug("Connecting", extra={"client_id": packet.client_id})
+        log.debug("Connecting client %r", packet.client_id)
         await self._send(self._encode(packet))
         try:
             # No asyncio.shield (unlike ping): on timeout the transport is closed and
@@ -160,10 +167,8 @@ class MQTTProtocol:
                     raise MQTTProtocolError(msg)
                 if pkt.return_code != 0:
                     raise MQTTConnectError(pkt.return_code)
-                log.info(
-                    "Connected",
-                    extra={"session_present": pkt.session_present},
-                )
+                log.info("Connected with session_present=%s", pkt.session_present)
+                self.inbound.begin_session(session_present=pkt.session_present)
                 return pkt
 
     async def run(self) -> None:
@@ -210,6 +215,7 @@ class MQTTProtocol:
             if not ping_f.done():
                 ping_f.set_exception(exc)
         self._ping_waiters.clear()
+        self.inbound.clear()
 
     def _ensure_alive(self) -> None:
         """Refuse new operations once the run loop has exited.
@@ -231,7 +237,7 @@ class MQTTProtocol:
         match packet.qos:
             case QoS.AT_MOST_ONCE:
                 await self._send(self._encode(packet))
-                log.debug("Published QoS 0", extra={"topic": packet.topic})
+                log.debug("Published QoS 0 to topic %r", packet.topic)
                 return None
 
             case QoS.AT_LEAST_ONCE:
@@ -245,10 +251,7 @@ class MQTTProtocol:
                     future=future,
                 )
                 await self._send(self._encode(packet))
-                log.debug(
-                    "Published QoS 1",
-                    extra={"topic": packet.topic, "packet_id": pid},
-                )
+                log.debug("Published QoS 1 to topic %r with packet_id=%d", packet.topic, pid)
                 return await future
 
             case QoS.EXACTLY_ONCE:
@@ -263,18 +266,15 @@ class MQTTProtocol:
                     future=future2,
                 )
                 await self._send(self._encode(packet))
-                log.debug(
-                    "Published QoS 2",
-                    extra={"topic": packet.topic, "packet_id": pid},
-                )
+                log.debug("Published QoS 2 to topic %r with packet_id=%d", packet.topic, pid)
                 return await future2
 
     async def subscribe(
         self,
         filters: list[SubscriptionRequest],
         *,
+        queue: asyncio.Queue[Message],
         auto_ack: bool = True,
-        queue_maxsize: int = 0,
         subscription_identifier: int | None = None,
     ) -> tuple[SubAck, dict[str, asyncio.Queue[Message]]]:
         """Send SUBSCRIBE and return (SubAck, {filter: queue}) after broker ACK.
@@ -283,10 +283,9 @@ class MQTTProtocol:
         Duplicate filters (already subscribed) are logged as warnings and skipped;
         they are still included in the SUBSCRIBE packet sent to the broker.
 
-        ``queue_maxsize`` bounds the per-filter delivery queue. When it is full,
-        ``_deliver`` blocks, which stalls the read loop and ultimately pushes back
-        on the broker through the TCP window — the flow-control chain the docs
-        describe. ``0`` keeps the queue unbounded.
+        ``queue`` is shared by all entries in this subscription. When it is full,
+        delivery blocks, which stalls the read loop and ultimately pushes back on
+        the broker through the TCP window.
 
         ``subscription_identifier`` (MQTT 5) is sent in the SUBSCRIBE properties;
         the broker echoes it on every PUBLISH this subscription causes, which lets
@@ -294,19 +293,21 @@ class MQTTProtocol:
         instead of guessing by filter specificity.
         """
         async with self._subscription_guards.hold(req.topic_filter for req in filters):
-            return await self._subscribe(
+            result = await self._subscribe(
                 filters,
                 auto_ack=auto_ack,
-                queue_maxsize=queue_maxsize,
+                queue=queue,
                 subscription_identifier=subscription_identifier,
             )
+        await self.inbound.drain()
+        return result
 
     async def _subscribe(
         self,
         filters: list[SubscriptionRequest],
         *,
         auto_ack: bool,
-        queue_maxsize: int,
+        queue: asyncio.Queue[Message],
         subscription_identifier: int | None,
     ) -> tuple[SubAck, dict[str, asyncio.Queue[Message]]]:
         new_entries: dict[str, SubscriptionEntry] = {}
@@ -317,7 +318,7 @@ class MQTTProtocol:
                 log.warning("Filter %r already subscribed (ignored)", f)
             else:
                 new_entries[f] = SubscriptionEntry(
-                    queue=asyncio.Queue(queue_maxsize),
+                    queue=queue,
                     auto_ack=auto_ack,
                     actual_filter=topic_matching._shared_filter_to_actual(f, self._stripped_prefixes),
                     subscription_identifier=subscription_identifier,
@@ -409,7 +410,7 @@ class MQTTProtocol:
                     Subscribe(packet_id=pid, subscriptions=tuple(filters), properties=properties),
                 ),
             )
-            log.debug("Sent SUBSCRIBE", extra={"packet_id": pid})
+            log.debug("Sent SUBSCRIBE with packet_id=%d", pid)
             suback = await future
             _raise_on_rejected_filters(filters, suback)
             return suback
@@ -430,7 +431,7 @@ class MQTTProtocol:
                     version=self._version,
                 ),
             )
-            log.debug("Sent UNSUBSCRIBE", extra={"packet_id": pid})
+            log.debug("Sent UNSUBSCRIBE with packet_id=%d", pid)
             return await future
         finally:
             self._state.pending_unsubs.pop(pid, None)
@@ -460,10 +461,12 @@ class MQTTProtocol:
                 msg,
             )
         await self._send(self._encode(packet))
-        log.debug("Sent AUTH", extra={"reason_code": packet.reason_code})
+        log.debug("Sent AUTH with reason_code=%d", packet.reason_code)
 
     async def _read_loop(self) -> None:
         while True:
+            for packet in self._buf:
+                await self._dispatch(packet)
             try:
                 data = await self._transport.read(4096)
             except MQTTDisconnectedError:
@@ -471,8 +474,6 @@ class MQTTProtocol:
                     return
                 raise
             self._buf.feed(data)
-            for packet in self._buf:
-                await self._dispatch(packet)
 
     async def _ping_loop(self) -> None:
         while True:
@@ -515,118 +516,14 @@ class MQTTProtocol:
                 msg = f"Unexpected packet from broker: {packet!r}"
                 raise MQTTProtocolError(msg)
 
-    def _select_subscription(self, publish: Publish) -> SubscriptionSelection:
-        identifier = publish.properties.subscription_identifier if publish.properties else None
-        if identifier is None:
-            return self._state.subscriptions.select(topic=publish.topic)
-        return self._state.subscriptions.select_by_identifier(
-            topic=publish.topic,
-            identifier=identifier,
-        )
-
     def _select_recipient(self, publish: Publish) -> InboundRecipient:
-        message = self._make_message(publish)
-        if self._request_router is not None:
-            request = self._request_router.claim(message)
-            if request is not None:
-                return InboundRecipient(
-                    message=message,
-                    request=request,
-                )
-
-        selection = self._select_subscription(publish)
-        if selection.identifier_missing:
-            identifier = publish.properties.subscription_identifier if publish.properties else None
-            log.warning(
-                "No subscription with identifier %r for topic %r, falling back to filter matching",
-                identifier,
-                publish.topic,
-            )
-        if selection.tied_filters:
-            log.warning(
-                "Multiple equally-specific subscribers for %r: %s, delivering to first",
-                publish.topic,
-                list(selection.tied_filters),
-            )
-        if selection.recipient is None:
-            log.warning("No subscriber for topic %r", publish.topic)
-        return InboundRecipient(
-            message=message,
-            subscription=selection.recipient,
-        )
+        return self.inbound.select_recipient(publish)
 
     async def _handle_publish(self, packet: Publish) -> None:
-        if packet.qos is QoS.AT_MOST_ONCE:
-            return await self._deliver(self._select_recipient(packet), ack_callback=None)
-        if packet.qos is QoS.AT_LEAST_ONCE:
-            return await self._handle_qos1_publish(packet)
-        if packet.qos is QoS.EXACTLY_ONCE:
-            return await self._handle_qos2_publish(packet)
-        return None
-
-    async def _handle_qos1_publish(self, packet: Publish) -> None:
-        if packet.packet_id is None:
-            msg = "Cannot publish without packet id"
-            raise ValueError(msg)
-        recipient = self._select_recipient(packet)
-        if recipient.auto_ack:
-            await self._send(self._encode(PubAck(packet_id=packet.packet_id)))
-            await self._deliver(recipient, ack_callback=None)
-        else:
-            acked = False
-
-            async def _puback() -> None:
-                nonlocal acked
-                if acked:
-                    return
-                acked = True
-                await self._send(self._encode(PubAck(packet_id=cast("int", packet.packet_id))))
-
-            await self._deliver(recipient, ack_callback=_puback)
-
-    async def _handle_qos2_publish(self, packet: Publish) -> None:
-        if packet.packet_id is None:
-            msg = "Cannot publish without packet id"
-            raise ValueError(msg)
-        if packet.packet_id in self._state.inflight_qos2_in:
-            # PUBREC already sent — resend it (duplicate PUBLISH after PUBREC)
-            await self._send(self._encode(PubRec(packet_id=packet.packet_id)))
-            return
-        if packet.packet_id in self._state.pending_ack_qos2_in:
-            # Duplicate PUBLISH while app hasn't called msg.ack() yet — ignore
-            return
-        recipient = self._select_recipient(packet)
-        if recipient.auto_ack:
-            self._state.inflight_qos2_in[packet.packet_id] = InboundQoS2Flight(
-                packet_id=packet.packet_id,
-                recipient=recipient,
-                state=InboundQoS2State.PENDING_PUBREL,
-            )
-            await self._send(self._encode(PubRec(packet_id=packet.packet_id)))
-        else:
-            self._state.pending_ack_qos2_in.add(packet.packet_id)
-            pid = packet.packet_id
-
-            async def _pubrec() -> None:
-                self._state.pending_ack_qos2_in.discard(pid)
-                self._state.inflight_qos2_in[pid] = InboundQoS2Flight(
-                    packet_id=pid,
-                    recipient=recipient,
-                    state=InboundQoS2State.PENDING_PUBREL,
-                    delivered=True,
-                )
-                await self._send(self._encode(PubRec(packet_id=pid)))
-
-            await self._deliver(recipient, ack_callback=_pubrec)
+        await self.inbound.handle_publish(packet)
 
     async def _handle_pubrel(self, packet: PubRel) -> None:
-        flight = self._state.inflight_qos2_in.pop(packet.packet_id, None)
-        if flight is None:
-            msg = f"PUBREL for unknown packet_id {packet.packet_id}"
-            raise MQTTProtocolError(msg)
-        await self._send(self._encode(PubComp(packet_id=packet.packet_id)))
-        if not flight.delivered:
-            await self._deliver(flight.recipient, ack_callback=None)
+        await self.inbound.handle_pubrel(packet)
 
     async def _handle_puback(self, packet: PubAck) -> None:
         flight = self._state.inflight_qos1.pop(packet.packet_id, None)
@@ -635,7 +532,7 @@ class MQTTProtocol:
             raise MQTTProtocolError(msg)
         self._state.packet_ids.release(packet.packet_id)
         flight.future.set_result(packet)
-        log.debug("QoS 1 ack received", extra={"packet_id": packet.packet_id})
+        log.debug("QoS 1 ack received for packet_id=%d", packet.packet_id)
 
     async def _handle_pubrec(self, packet: PubRec) -> None:
         flight = self._state.inflight_qos2_out.get(packet.packet_id)
@@ -649,10 +546,7 @@ class MQTTProtocol:
             )
         flight.state = OutboundQoS2State.PENDING_PUBCOMP
         await self._send(self._encode(PubRel(packet_id=packet.packet_id)))
-        log.debug(
-            "QoS 2 PUBREC received, sent PUBREL",
-            extra={"packet_id": packet.packet_id},
-        )
+        log.debug("QoS 2 PUBREC received, sent PUBREL for packet_id=%d", packet.packet_id)
 
     async def _handle_pubcomp(self, packet: PubComp) -> None:
         flight = self._state.inflight_qos2_out.pop(packet.packet_id, None)
@@ -661,7 +555,7 @@ class MQTTProtocol:
             raise MQTTProtocolError(msg)
         self._state.packet_ids.release(packet.packet_id)
         flight.future.set_result(packet)
-        log.debug("QoS 2 complete", extra={"packet_id": packet.packet_id})
+        log.debug("QoS 2 complete for packet_id=%d", packet.packet_id)
 
     async def _handle_suback(self, packet: SubAck) -> None:
         future = self._state.pending_subs.get(packet.packet_id)
@@ -689,38 +583,14 @@ class MQTTProtocol:
     def _encode(self, packet: AnyPacket) -> bytes:
         return encode(packet, version=self._version)
 
+    async def send_packet(self, packet: AnyPacket) -> None:
+        """Send an encoded packet on behalf of an internal protocol flow."""
+        await self._send(self._encode(packet))
+
+    async def abort(self) -> None:
+        """Close the transport after a terminal inbound-flow failure."""
+        await self._transport.close()
+
     async def _send(self, data: bytes) -> None:
         log.debug("Sending %d bytes", len(data))
         await self._transport.write(data)
-
-    async def _deliver(
-        self,
-        recipient: InboundRecipient,
-        ack_callback: Callable[[], Awaitable[None]] | None,
-    ) -> None:
-        if recipient.request is not None:
-            recipient.request.deliver()
-            return
-
-        subscription = recipient.subscription
-        if subscription is None:
-            return
-
-        filter_, entry = subscription
-        message = recipient.message
-        if not entry.auto_ack and ack_callback is not None:
-            message._ack_callback = ack_callback
-        await entry.queue.put(message)
-        log.debug(
-            "Delivered message",
-            extra={"topic": message.topic, "filter": filter_},
-        )
-
-    def _make_message(self, publish: Publish) -> Message:
-        return Message(
-            topic=publish.topic,
-            payload=publish.payload,
-            qos=publish.qos,
-            retain=publish.retain,
-            properties=publish.properties,
-        )

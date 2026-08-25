@@ -245,7 +245,7 @@ async def test_configured_prefix_reaches_subscribe() -> None:
     async def subscribe() -> None:
         await protocol.subscribe(
             [SubscriptionRequest(topic_filter="$q/sensors/+/state", qos=QoS.AT_MOST_ONCE)],
-            queue_maxsize=4,
+            queue=asyncio.Queue(),
         )
 
     task = asyncio.create_task(subscribe())
@@ -258,7 +258,6 @@ async def test_configured_prefix_reaches_subscribe() -> None:
     entry = protocol._state.subscriptions.get("$q/sensors/+/state")
     assert entry is not None
     assert entry.actual_filter == "sensors/+/state"
-    assert entry.queue.maxsize == 4
 
 
 async def test_subscription_identifier_routes_delivery() -> None:
@@ -435,7 +434,7 @@ async def test_subscribe_sends_identifier_in_properties() -> None:
     async def subscribe() -> None:
         await protocol.subscribe(
             [SubscriptionRequest(topic_filter="a/b", qos=QoS.AT_LEAST_ONCE)],
-            queue_maxsize=3,
+            queue=asyncio.Queue(),
             subscription_identifier=7,
         )
 
@@ -454,7 +453,6 @@ async def test_subscribe_sends_identifier_in_properties() -> None:
     assert packet.properties.subscription_identifier == 7
     entry = protocol._state.subscriptions.get("a/b")
     assert entry is not None
-    assert entry.queue.maxsize == 3
     assert entry.subscription_identifier == 7
     assert protocol._state.subscriptions.by_identifier(7) == [("a/b", entry)]
 
@@ -490,6 +488,7 @@ async def test_dead_protocol_refuses_new_operations() -> None:
     with pytest.raises(MQTTDisconnectedError):
         await protocol.subscribe(
             [SubscriptionRequest(topic_filter="a/b", qos=QoS.AT_MOST_ONCE)],
+            queue=asyncio.Queue(),
         )
 
 
@@ -520,6 +519,7 @@ async def test_suback_failure_rolls_back_subscription_index() -> None:
     task = asyncio.create_task(
         protocol.subscribe(
             [SubscriptionRequest(topic_filter="denied/topic", qos=QoS.AT_LEAST_ONCE)],
+            queue=asyncio.Queue(),
             subscription_identifier=7,
         ),
     )

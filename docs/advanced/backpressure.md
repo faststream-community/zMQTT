@@ -16,11 +16,10 @@ async with client.subscribe("telemetry/#", receive_buffer_size=100) as sub:
 
 The library's read loop reads packets from the TCP stream and dispatches them. When a `Subscription` queue is full:
 
-1. The relay task that moves messages from the internal protocol queue to your subscription queue blocks on `queue.put()`.
-2. The protocol's internal queue for that filter fills up.
-3. Read loop stops reading new data from the socket.
-4. The TCP receive buffer fills.
-5. The TCP stack signals backpressure to the broker via window size reduction.
+1. The read loop blocks on `queue.put()` to that subscription's queue.
+2. The read loop stops reading new data from the socket.
+3. The TCP receive buffer fills.
+4. The TCP stack signals backpressure to the broker via window size reduction.
 
 The result is bounded client-side memory and flow control back to the broker
 connection. What happens beyond that connection is broker-specific: the broker
@@ -52,7 +51,9 @@ to `1000` and caps the number of concurrent `request()` calls. Additional calls
 wait before publishing, applying backpressure to the caller. Every response is
 routed to a single recipient: a matching response completes only its request.
 An unmatched or late response follows normal routing and may be buffered by at
-most one regular `Subscription`; if none matches, it is discarded.
+most one regular `Subscription`. On a resumed persistent session, a message that
+arrives before its local subscription is declared uses the separate bounded
+[session replay buffer](persistent-sessions.md#startup-replay).
 
 !!! warning
     Applying backpressure affects all topics multiplexed on the same TCP connection. A slow consumer on one `Subscription` will stall delivery to all other subscriptions on the same client. If you need independent flow control per topic, use separate clients or scale your application using shared subscriptions or emqs `$queue`.

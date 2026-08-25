@@ -32,6 +32,7 @@ class BrokerTestBase(abc.ABC):
     host: ClassVar[str] = "127.0.0.1"
     port: ClassVar[int] = 1883
     version: ClassVar[Literal["3.1.1", "5.0"]] = "3.1.1"
+    supports_persistent_sessions: ClassVar[bool] = True
 
     @abc.abstractmethod
     async def handle_sub_duplicates(
@@ -74,6 +75,23 @@ class BrokerTestBase(abc.ABC):
         protocol = client._protocol
         assert protocol is not None
         await protocol._transport.close()
+
+    def persistent_client(
+        self,
+        *,
+        client_id: str,
+        session_replay_timeout: float = 30.0,
+    ) -> MQTTClient:
+        return MQTTClient(
+            self.host,
+            self.port,
+            client_id=client_id,
+            clean_session=False,
+            reconnect=ReconnectConfig(enabled=False),
+            version=self.version,
+            session_expiry_interval=60 if self.version == "5.0" else 0,
+            session_replay_timeout=session_replay_timeout,
+        )
 
     async def test_ping(self, mqtt_client: MQTTClient) -> None:
         await mqtt_client.ping()
@@ -359,6 +377,144 @@ class BrokerTestBase(abc.ABC):
             message = await message_task
 
         assert message.payload == b"after-single-reconnect"
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_persistent_session_replay_waits_for_subscription(
+        self,
+        topic: str,
+        qos: QoS,
+    ) -> None:
+        if not self.supports_persistent_sessions:
+            pytest.skip("Broker test configuration does not retain persistent sessions")
+        client_id = f"zmqtt-session-replay-{uuid.uuid4().hex[:8]}"
+        original = self.persistent_client(client_id=client_id)
+        await original.connect()
+        original_subscription = original.subscribe(topic, qos=qos)
+        await original_subscription.start()
+        await original.disconnect()
+
+        async with MQTTClient(self.host, self.port, version=self.version) as publisher:
+            await publisher.publish(topic, b"while-offline", qos=qos)
+
+        resumed = self.persistent_client(client_id=client_id)
+        await resumed.connect()
+        await asyncio.sleep(0.2)
+        replay_subscription = resumed.subscribe(topic, qos=qos)
+        await replay_subscription.start()
+        message = await asyncio.wait_for(replay_subscription.get_message(), timeout=5.0)
+        assert message.payload == b"while-offline"
+        assert message.qos is qos
+        await replay_subscription.stop()
+        await resumed.disconnect()
+
+    async def test_persistent_session_replay_preserves_manual_ack(
+        self,
+        topic: str,
+    ) -> None:
+        if not self.supports_persistent_sessions:
+            pytest.skip("Broker test configuration does not retain persistent sessions")
+        client_id = f"zmqtt-session-manual-ack-{uuid.uuid4().hex[:8]}"
+        original = self.persistent_client(client_id=client_id)
+        await original.connect()
+        original_subscription = original.subscribe(topic, qos=QoS.AT_LEAST_ONCE)
+        await original_subscription.start()
+        await original.disconnect()
+
+        async with MQTTClient(self.host, self.port, version=self.version) as publisher:
+            await publisher.publish(topic, b"ack-after-replay", qos=QoS.AT_LEAST_ONCE)
+
+        resumed = self.persistent_client(client_id=client_id)
+        await resumed.connect()
+        await asyncio.sleep(0.2)
+        manual_subscription = resumed.subscribe(
+            topic,
+            qos=QoS.AT_LEAST_ONCE,
+            auto_ack=False,
+        )
+        await manual_subscription.start()
+        first_delivery = await asyncio.wait_for(manual_subscription.get_message(), timeout=5.0)
+        await resumed.disconnect()
+
+        replayed_again = self.persistent_client(client_id=client_id)
+        await replayed_again.connect()
+        await asyncio.sleep(0.2)
+        final_subscription = replayed_again.subscribe(topic, qos=QoS.AT_LEAST_ONCE)
+        await final_subscription.start()
+        second_delivery = await asyncio.wait_for(final_subscription.get_message(), timeout=5.0)
+        assert first_delivery.payload == b"ack-after-replay"
+        assert second_delivery.payload == first_delivery.payload
+        await final_subscription.stop()
+        await replayed_again.disconnect()
+
+    async def test_persistent_session_replay_respects_subscription_buffer(
+        self,
+        topic: str,
+    ) -> None:
+        if not self.supports_persistent_sessions:
+            pytest.skip("Broker test configuration does not retain persistent sessions")
+        client_id = f"zmqtt-session-backpressure-{uuid.uuid4().hex[:8]}"
+        original = self.persistent_client(client_id=client_id)
+        await original.connect()
+        original_subscription = original.subscribe(topic, qos=QoS.AT_LEAST_ONCE)
+        await original_subscription.start()
+        await original.disconnect()
+
+        async with MQTTClient(self.host, self.port, version=self.version) as publisher:
+            await publisher.publish(topic, b"first", qos=QoS.AT_LEAST_ONCE)
+            await publisher.publish(topic, b"second", qos=QoS.AT_LEAST_ONCE)
+
+        resumed = self.persistent_client(client_id=client_id)
+        await resumed.connect()
+        await asyncio.sleep(0.2)
+        replay_subscription = resumed.subscribe(
+            topic,
+            qos=QoS.AT_LEAST_ONCE,
+            receive_buffer_size=1,
+        )
+        await replay_subscription.start()
+        first = await asyncio.wait_for(replay_subscription.get_message(), timeout=5.0)
+        second = await asyncio.wait_for(replay_subscription.get_message(), timeout=5.0)
+        assert [first.payload, second.payload] == [b"first", b"second"]
+        await replay_subscription.stop()
+        await resumed.disconnect()
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_persistent_session_replay_drops_without_ack_after_timeout(
+        self,
+        topic: str,
+        qos: QoS,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        if not self.supports_persistent_sessions:
+            pytest.skip("Broker test configuration does not retain persistent sessions")
+        client_id = f"zmqtt-session-timeout-{uuid.uuid4().hex[:8]}"
+        original = self.persistent_client(client_id=client_id)
+        await original.connect()
+        original_subscription = original.subscribe(topic, qos=qos)
+        await original_subscription.start()
+        await original.disconnect()
+
+        async with MQTTClient(self.host, self.port, version=self.version) as publisher:
+            await publisher.publish(topic, b"expired", qos=qos)
+
+        resumed = self.persistent_client(
+            client_id=client_id,
+            session_replay_timeout=0.1,
+        )
+        await resumed.connect()
+        await asyncio.sleep(0.5)
+        await resumed.disconnect()
+
+        replayed_again = self.persistent_client(client_id=client_id)
+        await replayed_again.connect()
+        await asyncio.sleep(0.2)
+        replay_subscription = replayed_again.subscribe(topic, qos=qos)
+        await replay_subscription.start()
+        message = await asyncio.wait_for(replay_subscription.get_message(), timeout=5.0)
+        assert message.payload == b"expired"
+        assert any("Dropped 1 persistent-session replay messages" in message for message in caplog.messages)
+        await replay_subscription.stop()
+        await replayed_again.disconnect()
 
     async def test_tcp_disconnect_wakes_subscription_when_reconnect_disabled(self, topic: str) -> None:
         client = MQTTClient(

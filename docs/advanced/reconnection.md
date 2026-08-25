@@ -85,6 +85,8 @@ This preserves the local subscription lifecycle, not every message published
 while the client was offline. Delivery during the gap depends on QoS and the
 broker-side session; durable redelivery requires the persistent-session settings
 described in [Manual Acknowledgement](manual-ack.md#connection-loss-before-ack).
+See [Persistent Sessions](persistent-sessions.md) for startup replay and
+subscription-ordering details.
 
 ## Disabling reconnection
 

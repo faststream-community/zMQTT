@@ -185,7 +185,6 @@ class Subscription:
         self._qos = qos
         self._auto_ack = auto_ack
         self._queue: asyncio.Queue[Message] = asyncio.Queue(receive_buffer_size)
-        self._relay_tasks: list[asyncio.Task[None]] = []
         self._no_local = no_local
         self._retain_as_published = retain_as_published
         self._retain_handling = retain_handling
@@ -208,7 +207,6 @@ class Subscription:
     async def __aexit__(self, *exc: object) -> None:
         """Unsubscribe from all filters and stop message delivery."""
         self._client._subscriptions.remove(self)
-        await self._cancel_relays()
         being_cancelled = isinstance(exc[1], asyncio.CancelledError)
         if not being_cancelled and self._registered_filters and self._client._protocol is not None:
             with contextlib.suppress(Exception):
@@ -228,29 +226,14 @@ class Subscription:
         _, queues = await protocol.subscribe(
             reqs,
             auto_ack=self._auto_ack,
-            queue_maxsize=self._queue.maxsize,
+            queue=self._queue,
             subscription_identifier=self._subscription_identifier,
         )
         self._registered_filters = list(queues.keys())
-        for q in queues.values():
-            task: asyncio.Task[None] = asyncio.create_task(self._relay_loop(q))
-            self._relay_tasks.append(task)
-
-    async def _cancel_relays(self) -> None:
-        for t in self._relay_tasks:
-            t.cancel()
-        await asyncio.gather(*self._relay_tasks, return_exceptions=True)
-        self._relay_tasks.clear()
 
     async def _reconnect(self, protocol: MQTTProtocol) -> None:
         """Re-subscribe on a fresh protocol after reconnection."""
-        await self._cancel_relays()
         await self._do_subscribe(protocol)
-
-    async def _relay_loop(self, source: asyncio.Queue[Message]) -> None:
-        while True:
-            msg = await source.get()
-            await self._queue.put(msg)
 
     async def start(self) -> None:
         """Register the subscription filters with the broker.
@@ -274,9 +257,8 @@ class Subscription:
         """Unsubscribe from all filters and stop message delivery.
 
         Equivalent to exiting the async context manager. Sends UNSUBSCRIBE to
-        the broker and cancels internal relay tasks. Safe to call even if the
-        connection has already been lost — the UNSUBSCRIBE is silently skipped
-        in that case.
+        the broker. Safe to call even if the connection has already been lost —
+        the UNSUBSCRIBE is silently skipped in that case.
 
         Example::
 
@@ -292,7 +274,9 @@ class Subscription:
         """
         failure_signal = self._client._subscription_failure
         if failure_signal is None:
-            return await self._queue.get()
+            message = await self._queue.get()
+            await self._notify_capacity_available()
+            return message
         if failure_signal.done():
             raise failure_signal.result()
 
@@ -304,11 +288,18 @@ class Subscription:
             )
             if failure_signal in done:
                 raise failure_signal.result()
-            return message_task.result()
+            message = message_task.result()
+            await self._notify_capacity_available()
+            return message
         finally:
             if not message_task.done():
                 message_task.cancel()
             await asyncio.gather(message_task, return_exceptions=True)
+
+    async def _notify_capacity_available(self) -> None:
+        protocol = self._client._protocol
+        if protocol is not None:
+            await protocol.inbound.drain()
 
     def __aiter__(self) -> AsyncIterator[Message]:
         """Return self as the async iterator."""
@@ -346,6 +337,8 @@ class MQTTClient:
         session_expiry_interval: int = 0,
         stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
         max_pending_requests: int = 1000,
+        session_replay_buffer_size: int = 1000,
+        session_replay_timeout: float = 30.0,
     ) -> None:
         """Create an MQTT client.
 
@@ -394,9 +387,21 @@ class MQTTClient:
                 delivers on unchanged (e.g. ``$SYS``) must not be listed.
             max_pending_requests: Maximum concurrent MQTT 5.0 ``request()`` calls.
                 Additional calls wait until capacity is available.
+            session_replay_buffer_size: Maximum unmatched messages held while a
+                resumed persistent session waits for local subscriptions. ``0``
+                makes the buffer unbounded. Defaults to ``1000``.
+            session_replay_timeout: Seconds a persistent-session message may
+                remain in the replay buffer. Remaining messages are dropped
+                without acknowledgement after the timeout. Defaults to ``30.0``.
         """
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
+            raise ValueError(msg)
+        if session_replay_buffer_size < 0:
+            msg = "session_replay_buffer_size must be non-negative"
+            raise ValueError(msg)
+        if not session_replay_timeout > 0:
+            msg = "session_replay_timeout must be positive"
             raise ValueError(msg)
         if will is not None and will.properties is not None and version != "5.0":
             msg = "will properties require MQTT 5.0"
@@ -418,6 +423,8 @@ class MQTTClient:
         self._session_expiry_interval = session_expiry_interval
         self._stripped_prefixes = stripped_prefixes
         self._request_dispatcher = _RequestDispatcher(max_pending_requests)
+        self._session_replay_buffer_size = session_replay_buffer_size
+        self._session_replay_timeout = session_replay_timeout
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
         self._run_task: asyncio.Task[None] | None = None
@@ -729,6 +736,8 @@ class MQTTClient:
             version=self._version,
             stripped_prefixes=self._stripped_prefixes,
             request_router=self._request_dispatcher,
+            session_replay_buffer_size=self._session_replay_buffer_size,
+            session_replay_timeout=self._session_replay_timeout,
         )
         connect_props = None
         if self._version == "5.0":
@@ -838,6 +847,8 @@ def create_client(
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     max_pending_requests: int = ...,
+    session_replay_buffer_size: int = ...,
+    session_replay_timeout: float = ...,
 ) -> MQTTClientV311: ...
 
 
@@ -859,6 +870,8 @@ def create_client(
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     max_pending_requests: int = ...,
+    session_replay_buffer_size: int = ...,
+    session_replay_timeout: float = ...,
     version: Literal["3.1.1"],
 ) -> MQTTClientV311: ...
 
@@ -881,6 +894,8 @@ def create_client(
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
     max_pending_requests: int = ...,
+    session_replay_buffer_size: int = ...,
+    session_replay_timeout: float = ...,
     version: Literal["5.0"],
 ) -> MQTTClientV5: ...
 
@@ -902,6 +917,8 @@ def create_client(
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
     max_pending_requests: int = 1000,
+    session_replay_buffer_size: int = 1000,
+    session_replay_timeout: float = 30.0,
     version: Literal["3.1.1", "5.0"] = "3.1.1",
 ) -> MQTTClientV311 | MQTTClientV5:
     """Create a version-typed MQTT client.
@@ -926,4 +943,6 @@ def create_client(
         version=version,
         session_expiry_interval=session_expiry_interval,
         max_pending_requests=max_pending_requests,
+        session_replay_buffer_size=session_replay_buffer_size,
+        session_replay_timeout=session_replay_timeout,
     )

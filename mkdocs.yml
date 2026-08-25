@@ -31,6 +31,7 @@ nav:
   - Advanced:
     - Manual Ack: advanced/manual-ack.md
     - Reconnection: advanced/reconnection.md
+    - Persistent Sessions: advanced/persistent-sessions.md
     - Ping: advanced/ping.md
     - MQTT 5.0: advanced/mqtt5.md
     - Request / Response: advanced/request-response.md
