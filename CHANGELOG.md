@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v0.2.0 (2026-08-25)
+
+### Bug Fixes
+
+- Accept persistent session deliveries and wait for matching subscription on idle. Fixes #59
+  ([#62](https://github.com/faststream-community/zMQTT/pull/62),
+  [`d59204c`](https://github.com/faststream-community/zMQTT/commit/d59204c82cc8ac78b26ba0112156720065aeec40))
+
+- Artemis last will test ([#55](https://github.com/faststream-community/zMQTT/pull/55),
+  [`a0b9103`](https://github.com/faststream-community/zMQTT/commit/a0b910364f2c929a4c279d6ba0d145d230fcb5d8))
+
+- Propagate terminal error to subscription
+  ([#60](https://github.com/faststream-community/zMQTT/pull/60),
+  [`68410a0`](https://github.com/faststream-community/zMQTT/commit/68410a07d52ab6c05c4957c119ebe8922cadfba2))
+
+### Chores
+
+- Speed up tests with pytest-xdist ([#54](https://github.com/faststream-community/zMQTT/pull/54),
+  [`b05d644`](https://github.com/faststream-community/zMQTT/commit/b05d644cc400a5e61ea89499b611ef7314fd8d8d))
+
+### Continuous Integration
+
+- **deps**: Bump astral-sh/setup-uv from 9.0.0 to 10.0.1 in the github-actions group
+  ([#56](https://github.com/faststream-community/zMQTT/pull/56),
+  [`ed7dc1c`](https://github.com/faststream-community/zMQTT/commit/ed7dc1caac66e753907c00476fd7dcc374235a5e))
+
+### Features
+
+- Add callback for reconnect failing ([#61](https://github.com/faststream-community/zMQTT/pull/61),
+  [`5c1c346`](https://github.com/faststream-community/zMQTT/commit/5c1c34601838744546e7f098c590a01c00a23d2f))
+
+### Testing
+
+- **artemis**: Skip flaky message ordering test
+  ([#58](https://github.com/faststream-community/zMQTT/pull/58),
+  [`55f7d5b`](https://github.com/faststream-community/zMQTT/commit/55f7d5b44a84caea8b90e30099555554f5b7f2e9))
+
+
 ## v0.1.1 (2026-08-16)
 
 ### Chores
