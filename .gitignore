@@ -11,3 +11,4 @@ site
 .venv
 
 .coverage
+htmlcov
