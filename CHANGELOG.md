@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.2.1 (2026-08-30)
+
+### Bug Fixes
+
+- **publish**: Raise MQTTPublishError on negative PUBACK/PUBREC reason codes.
+  ([#67](https://github.com/faststream-community/zMQTT/pull/67),
+  [`3aa3498`](https://github.com/faststream-community/zMQTT/commit/3aa349877b8c78ef128b5a921f4a84479a82e37d))
+
+### Chores
+
+- **tests**: Add htmlcov badge ([#64](https://github.com/faststream-community/zMQTT/pull/64),
+  [`636dc6a`](https://github.com/faststream-community/zMQTT/commit/636dc6afa0974a6f296ce6b1eedfa7de21733f1a))
+
+### Documentation
+
+- Placed docs link to readme header ([#66](https://github.com/faststream-community/zMQTT/pull/66),
+  [`f937323`](https://github.com/faststream-community/zMQTT/commit/f937323687cf1872cdf3a88782e300ff4e4b4379))
+
+
 ## v0.2.0 (2026-08-25)
 
 ### Bug Fixes
