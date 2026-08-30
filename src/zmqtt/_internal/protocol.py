@@ -39,11 +39,25 @@ from zmqtt.errors import (
     MQTTConnectError,
     MQTTDisconnectedError,
     MQTTProtocolError,
+    MQTTPublishError,
     MQTTSubscribeError,
     MQTTTimeoutError,
 )
 
 log = logging.getLogger("zmqtt.protocol")
+
+# see: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901124
+_PUBLISH_REASON_NAMES: Final[dict[int, str]] = {
+    0x00: "Success",
+    0x10: "No matching subscribers",
+    0x80: "Unspecified error",
+    0x83: "Implementation specific error",
+    0x87: "Not authorized",
+    0x90: "Topic Name invalid",
+    0x91: "Packet Identifier in use",
+    0x97: "Quota exceeded",
+    0x99: "Payload format invalid",
+}
 
 
 class _SubscriptionGuard:
@@ -93,6 +107,25 @@ def _raise_on_rejected_filters(filters: list[SubscriptionRequest], suback: SubAc
     failures = {req.topic_filter: code for req, code in zip(filters, suback.return_codes, strict=False) if code >= 0x80}
     if failures:
         raise MQTTSubscribeError(failures)
+
+
+def _publish_error(packet: PubAck | PubRec) -> MQTTPublishError:
+    return MQTTPublishError(
+        packet.reason_code,
+        _PUBLISH_REASON_NAMES.get(packet.reason_code),
+        packet.properties.reason_string if packet.properties is not None else None,
+    )
+
+
+def _raise_on_rejected_puback(puback: PubAck) -> None:
+    """Surface PUBACK failure codes (>= 0x80) instead of ignoring them.
+
+    A rejected publish otherwise looks exactly like a successful publish.
+    """
+    if puback.reason_code >= 0x80:
+        err = _publish_error(puback)
+        log.debug("QoS 1 ack received with error for packet_id=%d: %s", puback.packet_id, err)
+        raise err
 
 
 class MQTTProtocol:
@@ -252,7 +285,9 @@ class MQTTProtocol:
                 )
                 await self._send(self._encode(packet))
                 log.debug("Published QoS 1 to topic %r with packet_id=%d", packet.topic, pid)
-                return await future
+                ack = await future
+                _raise_on_rejected_puback(ack)
+                return ack
 
             case QoS.EXACTLY_ONCE:
                 loop = asyncio.get_running_loop()
@@ -531,7 +566,8 @@ class MQTTProtocol:
             msg = f"PUBACK for unknown packet_id {packet.packet_id}"
             raise MQTTProtocolError(msg)
         self._state.packet_ids.release(packet.packet_id)
-        flight.future.set_result(packet)
+        if not flight.future.done():
+            flight.future.set_result(packet)
         log.debug("QoS 1 ack received for packet_id=%d", packet.packet_id)
 
     async def _handle_pubrec(self, packet: PubRec) -> None:
@@ -544,6 +580,18 @@ class MQTTProtocol:
             raise MQTTProtocolError(
                 msg,
             )
+        # Unlike PUBACK/SUBACK, a negative PUBREC has no follow-up packet — MQTT 5
+        # terminates the QoS 2 flow here instead of sending PUBCOMP. The error must
+        # be raised from the handler because it also decides not to send PUBREL below.
+        if packet.reason_code >= 0x80:
+            self._state.inflight_qos2_out.pop(packet.packet_id, None)
+            self._state.packet_ids.release(packet.packet_id)
+            err = _publish_error(packet)
+            if not flight.future.done():
+                flight.future.set_exception(err)
+            log.debug("QoS 2 ack received with error for packet_id=%d: %s", packet.packet_id, err)
+            return
+
         flight.state = OutboundQoS2State.PENDING_PUBCOMP
         await self._send(self._encode(PubRel(packet_id=packet.packet_id)))
         log.debug("QoS 2 PUBREC received, sent PUBREL for packet_id=%d", packet.packet_id)
@@ -554,7 +602,8 @@ class MQTTProtocol:
             msg = f"PUBCOMP for unknown packet_id {packet.packet_id}"
             raise MQTTProtocolError(msg)
         self._state.packet_ids.release(packet.packet_id)
-        flight.future.set_result(packet)
+        if not flight.future.done():
+            flight.future.set_result(packet)
         log.debug("QoS 2 complete for packet_id=%d", packet.packet_id)
 
     async def _handle_suback(self, packet: SubAck) -> None:

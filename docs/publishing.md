@@ -37,6 +37,11 @@ QoS 2 does not make arbitrary application side effects exactly once. A process
 can still fail between changing application state and completing the MQTT
 handshake, so handlers that write to external systems should remain idempotent.
 
+On a `version="5.0"` connection, a QoS 1 or QoS 2 `publish()` raises
+`MQTTPublishError` if the broker's PUBACK/PUBREC reports a reason code of
+`0x80` or greater (for example, an ACL denial) — see
+[`MQTTPublishError`](error-handling.md#mqttpublisherror).
+
 ## Retain flag
 
 A retained message is stored by the broker and delivered to any future subscriber immediately on subscribe:

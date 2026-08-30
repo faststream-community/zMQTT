@@ -9,6 +9,7 @@ MQTTError
   ├── MQTTDisconnectedError # connection lost unexpectedly
   ├── MQTTTimeoutError      # PINGRESP or CONNACK timed out
   ├── MQTTSubscribeError    # one or more filters rejected by the broker
+  ├── MQTTPublishError      # QoS 1/2 publish rejected by the broker
   └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
 
@@ -22,6 +23,7 @@ from zmqtt import (
     MQTTDisconnectedError,
     MQTTTimeoutError,
     MQTTSubscribeError,
+    MQTTPublishError,
     MQTTInvalidTopicError,
 )
 ```
@@ -68,6 +70,36 @@ except MQTTSubscribeError as e:
 ```
 
 The same exception is raised by `await sub.start()` when using the manual subscription lifecycle.
+
+### `MQTTPublishError`
+
+Raised on a `version="5.0"` connection when the broker rejects a QoS 1 or QoS 2
+`publish()` — a PUBACK or PUBREC reason code of `0x80` or greater. A common
+cause is an authorization denial. The `reason_code` attribute holds the numeric
+code, `reason_name` the spec's name for it (`None` for a code zmqtt doesn't
+recognize), and `reason_string` the broker's optional Reason String property:
+
+```python
+from zmqtt import MQTTPublishError, QoS
+
+try:
+    await client.publish("private/topic", b"payload", qos=QoS.AT_LEAST_ONCE)
+except MQTTPublishError as e:
+    print(f"Publish rejected: 0x{e.reason_code:02X} ({e.reason_name})")
+```
+
+For QoS 2, a rejected PUBREC ends the handshake immediately — no PUBREL is
+sent, since MQTT 5.0 only permits PUBREL after a PUBREC reason code below
+`0x80`. In both cases the packet identifier is released and the connection
+remains usable for further operations.
+
+Not raised for QoS 0, and not raised at all on `version="3.1.1"` connections —
+PUBACK and PUBREC carry no reason code in that protocol version, so a rejected
+publish there completes without error unless the broker instead closes the
+connection.
+
+See [PUBACK and PUBREC reason codes](advanced/mqtt5.md#puback-and-pubrec-reason-codes)
+for more detail.
 
 ### `MQTTProtocolError`
 

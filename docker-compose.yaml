@@ -12,6 +12,7 @@ services:
     image: eclipse-mosquitto:2
     volumes:
       - ./docker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./docker/mosquitto.acl:/mosquitto/config/mosquitto.acl:ro
     ports:
       - "1884:1883"
     security_opt:

@@ -510,6 +510,7 @@ class MQTTClient:
                 ``$`` in a non-leading position.
             MQTTDisconnectedError: If the client is not currently connected.
             RuntimeError: If *properties* is supplied on an MQTT 3.1.1 connection.
+            MQTTPublishError: If the broker rejects a QoS 1/2 publish. Not raised for QoS 0 or MQTT 3.1.1.
         """
         validate_publish(topic)
         if self._protocol is None:

@@ -149,6 +149,33 @@ Common failed-CONNACK reason codes are:
 
 See the [MQTT 5.0 spec](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html) for the full list.
 
+## PUBACK and PUBREC reason codes
+
+PUBACK (QoS 1) and PUBREC (QoS 2) also carry a reason code in MQTT 5.0. A code
+below `0x80` — including `0x00` (Success) and `0x10` (No matching
+subscribers) — completes `publish()` normally. A code of `0x80` or greater
+raises [`MQTTPublishError`](../error-handling.md#mqttpublisherror):
+
+```python
+from zmqtt import MQTTPublishError, QoS
+
+try:
+    await client.publish("private/topic", b"payload", qos=QoS.AT_LEAST_ONCE)
+except MQTTPublishError as e:
+    print(f"Publish rejected: 0x{e.reason_code:02X} ({e.reason_name})")
+```
+
+`reason_name` is the spec's name for the code. The broker's optional Reason
+String property is exposed separately as `reason_string`, and is `None` when
+the broker omits it.
+
+This check does not apply to `version="3.1.1"` connections, where PUBACK and
+PUBREC carry no reason code.
+
+See the MQTT 5.0 spec for the permitted reason codes:
+[PUBACK](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901124)
+and [PUBREC](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901134).
+
 ---
 
 **See also:** [Connecting — Version selection](../connecting.md#version-selection) · [Publishing](../publishing.md) · [Subscribing](../subscribing.md) · [Error Handling](../error-handling.md)

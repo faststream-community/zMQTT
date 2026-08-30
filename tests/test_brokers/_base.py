@@ -7,6 +7,7 @@ Run with:  pytest -m broker
 import abc
 import asyncio
 import contextlib
+import re
 import uuid
 from collections.abc import AsyncGenerator
 from typing import ClassVar, Literal
@@ -17,6 +18,7 @@ from zmqtt import (
     MQTTClient,
     MQTTDisconnectedError,
     MQTTProtocolError,
+    MQTTPublishError,
     PublishProperties,
     QoS,
     ReconnectConfig,
@@ -33,6 +35,8 @@ class BrokerTestBase(abc.ABC):
     port: ClassVar[int] = 1883
     version: ClassVar[Literal["3.1.1", "5.0"]] = "3.1.1"
     supports_persistent_sessions: ClassVar[bool] = True
+    has_publish_deny_acl: ClassVar[bool] = False
+    denied_topic: ClassVar[str] = "zmqtt/e2e/denied"
 
     @abc.abstractmethod
     async def handle_sub_duplicates(
@@ -93,6 +97,12 @@ class BrokerTestBase(abc.ABC):
             session_replay_timeout=session_replay_timeout,
         )
 
+    def _skip_unless_denied_topic(self, version: Literal["3.1.1", "5.0"]) -> None:
+        if not self.has_publish_deny_acl:
+            pytest.skip("Broker under test has no ACL denying publish to denied_topic")
+        if self.version != version:
+            pytest.skip(f"Test covers MQTT {version} behaviour only")
+
     async def test_ping(self, mqtt_client: MQTTClient) -> None:
         await mqtt_client.ping()
 
@@ -104,6 +114,57 @@ class BrokerTestBase(abc.ABC):
 
     async def test_publish_qos2(self, mqtt_client: MQTTClient, topic: str) -> None:
         await mqtt_client.publish(topic, b"hello", qos=QoS.EXACTLY_ONCE)
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_publish_in_denied_topic_raises_error(
+        self,
+        mqtt_client: MQTTClient,
+        qos: QoS,
+    ) -> None:
+        self._skip_unless_denied_topic("5.0")
+
+        with pytest.raises(
+            MQTTPublishError, match=re.escape("Broker rejected publish (0x87 Not authorized)")
+        ) as exc_info:
+            await mqtt_client.publish(self.denied_topic, b"denied", qos=qos)
+
+        assert exc_info.value.reason_code == 0x87
+        assert exc_info.value.reason_name == "Not authorized"
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_publish_in_denied_topic_remains_connection_usable(
+        self,
+        mqtt_client: MQTTClient,
+        qos: QoS,
+        topic: str,
+    ) -> None:
+        self._skip_unless_denied_topic("5.0")
+        with pytest.raises(MQTTPublishError, match=re.escape("Broker rejected publish (0x87 Not authorized)")):
+            await mqtt_client.publish(self.denied_topic, b"denied", qos=qos)
+
+        async with mqtt_client.subscribe(topic) as sub:
+            await mqtt_client.publish(topic, b"payload-qos0")
+            msg = await sub.get_message()
+
+        assert msg.topic == topic
+        assert msg.payload == b"payload-qos0"
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_publish_in_denied_topic_mqtt311_does_not_raise(
+        self,
+        mqtt_client: MQTTClient,
+        qos: QoS,
+        topic: str,
+    ) -> None:
+        self._skip_unless_denied_topic("3.1.1")
+        await mqtt_client.publish(self.denied_topic, b"denied", qos=qos)
+
+        async with mqtt_client.subscribe(topic) as sub:
+            await mqtt_client.publish(topic, b"payload-qos0")
+            msg = await sub.get_message()
+
+        assert msg.topic == topic
+        assert msg.payload == b"payload-qos0"
 
     async def test_subscribe_receive_qos0(
         self,

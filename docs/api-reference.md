@@ -115,6 +115,10 @@
     options:
       show_source: false
 
+::: zmqtt.MQTTPublishError
+    options:
+      show_source: false
+
 ::: zmqtt.MQTTInvalidTopicError
     options:
       show_source: false

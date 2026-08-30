@@ -35,5 +35,27 @@ class MQTTSubscribeError(MQTTError):
         super().__init__(f"Broker rejected subscription: {rendered}")
 
 
+class MQTTPublishError(MQTTError):
+    """The broker rejected a QoS 1/2 publish.
+
+    *reason_name* is the spec's name for *reason_code* (``None`` for a code
+    zmqtt does not recognize). *reason_string* is the broker's optional Reason
+    String property.
+    """
+
+    def __init__(
+        self,
+        reason_code: int,
+        reason_name: str | None,
+        reason_string: str | None,
+    ) -> None:
+        self.reason_code = reason_code
+        self.reason_name = reason_name
+        self.reason_string = reason_string
+        named = f"0x{reason_code:02X} {reason_name}" if reason_name else f"0x{reason_code:02X}"
+        detail = f": {reason_string}" if reason_string else ""
+        super().__init__(f"Broker rejected publish ({named}){detail}")
+
+
 class MQTTInvalidTopicError(MQTTError):
     """Topic string or topic filter failed MQTT validation."""

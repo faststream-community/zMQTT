@@ -7,6 +7,8 @@ from zmqtt import Subscription
 
 
 class BaseTestMosquitto(BrokerTestBase):
+    has_publish_deny_acl = True
+
     async def handle_sub_duplicates(
         self,
         *,
