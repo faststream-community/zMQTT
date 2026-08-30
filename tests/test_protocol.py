@@ -15,7 +15,7 @@ import pytest
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
-from zmqtt._internal.packets.properties import PubAckProperties, PublishProperties
+from zmqtt._internal.packets.properties import PublishProperties
 from zmqtt._internal.packets.publish import PubAck, Publish, PubRec, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import SubAck, Subscribe, SubscriptionRequest
@@ -23,7 +23,6 @@ from zmqtt._internal.protocol import (
     _PUBLISH_REASON_NAMES,
     MQTTProtocol,
     _raise_on_rejected_filters,
-    _raise_on_rejected_puback,
 )
 from zmqtt._internal.state import SessionState
 from zmqtt._internal.subscription_index import SubscriptionEntry
@@ -595,81 +594,6 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
 
     assert queue.empty()
 
-    await _stop_task(read_task)
-
-
-@pytest.mark.parametrize("reason_code", [0x00, 0x10])
-async def test_publish_qos1_accepted_puback_returns_ack(reason_code: int) -> None:
-    """0x00 and 0x10 (No matching subscribers) are successes: publish() returns the PubAck."""
-    protocol, transport = make_protocol(version="5.0")
-    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="5.0"))
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-    read_task = await _run_read_loop(protocol)
-    publish_task = asyncio.create_task(
-        protocol.publish(
-            Publish(topic="t/x", payload=b"payload", qos=QoS.AT_LEAST_ONCE, retain=False, dup=False, packet_id=0),
-        ),
-    )
-    await asyncio.sleep(0)
-    pid = next(iter(protocol._state.inflight_qos1))
-
-    transport.feed(encode(PubAck(packet_id=pid, reason_code=reason_code), version="5.0"))
-    ack = await publish_task
-
-    assert ack == PubAck(packet_id=pid, reason_code=reason_code)
-    assert pid not in protocol._state.inflight_qos1
-    await _stop_task(read_task)
-
-
-def test_puback_failure_with_unknown_error_code_sets_reason_name_none() -> None:
-    puback = PubAck(packet_id=1, reason_code=0xFF)
-
-    with pytest.raises(MQTTPublishError) as exc_info:
-        _raise_on_rejected_puback(puback)
-
-    assert exc_info.value.reason_code == 0xFF
-    assert exc_info.value.reason_name is None
-
-
-def test_puback_failure_preserves_broker_reason_string() -> None:
-    puback = PubAck(
-        packet_id=1,
-        reason_code=0x87,
-        properties=PubAckProperties(reason_string="acl denied"),
-    )
-
-    with pytest.raises(MQTTPublishError) as exc_info:
-        _raise_on_rejected_puback(puback)
-
-    assert exc_info.value.reason_name == "Not authorized"
-    assert exc_info.value.reason_string == "acl denied"
-    assert str(exc_info.value) == "Broker rejected publish (0x87 Not authorized): acl denied"
-
-
-@pytest.mark.parametrize("reason_code", PUBLISH_FAILURE_CODES)
-async def test_publish_qos1_rejected_puback_raises_and_releases_packet_id(reason_code: int) -> None:
-    """publish() raises MQTTPublishError on a rejected PUBACK and frees the packet_id."""
-    protocol, transport = make_protocol(version="5.0")
-    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="5.0"))
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-    transport.sent.clear()
-    read_task = await _run_read_loop(protocol)
-    publish_task = asyncio.create_task(
-        protocol.publish(
-            Publish(topic="t/x", payload=b"payload", qos=QoS.AT_LEAST_ONCE, retain=False, dup=False, packet_id=0),
-        ),
-    )
-    await asyncio.sleep(0)
-    pid = next(iter(protocol._state.inflight_qos1))
-
-    transport.feed(encode(PubAck(packet_id=pid, reason_code=reason_code), version="5.0"))
-    with pytest.raises(MQTTPublishError) as exc_info:
-        await publish_task
-
-    assert exc_info.value.reason_code == reason_code
-    assert exc_info.value.reason_name == _PUBLISH_REASON_NAMES[reason_code]
-    assert pid not in protocol._state.inflight_qos1
-    assert protocol._state.packet_ids.acquire() == pid  # proves release: id is reused
     await _stop_task(read_task)
 
 

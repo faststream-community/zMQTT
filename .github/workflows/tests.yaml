@@ -65,21 +65,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup mosquitto config
-        run: |
-          mkdir -p docker
-          cat > docker/mosquitto.conf <<EOF
-          listener 1883
-          allow_anonymous true
-          EOF
-
       - name: Copy mosquitto config
         env:
           MOSQUITTO_ID: ${{ job.services.mosquitto.id }}
         run: |
           echo "Mosquitto container: $MOSQUITTO_ID"
           docker cp docker/mosquitto.conf "$MOSQUITTO_ID:/mosquitto/config/mosquitto.conf"
-          docker exec "$MOSQUITTO_ID" chmod 644 /mosquitto/config/mosquitto.conf
+          docker cp docker/mosquitto.acl "$MOSQUITTO_ID:/mosquitto/config/mosquitto.acl"
+          docker exec "$MOSQUITTO_ID" chmod 644 \
+            /mosquitto/config/mosquitto.conf \
+            /mosquitto/config/mosquitto.acl
+          # SIGHUP reloads the config and the ACL file without dropping the
+          # listener, so the service container keeps its published port.
+          docker kill -s HUP "$MOSQUITTO_ID"
 
       - name: Wait for brokers
         run: |
@@ -125,7 +123,8 @@ jobs:
       - name: Install and start mosquitto
         run: |
           brew install mosquitto
-          printf 'listener 1884\nallow_anonymous true\n' > /tmp/mosquitto.conf
+          printf 'listener 1884\nallow_anonymous true\nacl_file %s\n' \
+            "$GITHUB_WORKSPACE/docker/mosquitto.acl" > /tmp/mosquitto.conf
           $(brew --prefix)/sbin/mosquitto -c /tmp/mosquitto.conf -d
           sleep 2
 
@@ -152,7 +151,8 @@ jobs:
         shell: pwsh
         run: |
           winget install -e --id EclipseFoundation.Mosquitto --accept-source-agreements --accept-package-agreements --silent
-          Set-Content -Path "$env:TEMP\mosquitto.conf" -Value "listener 1884`r`nallow_anonymous true"
+          $acl = "$env:GITHUB_WORKSPACE\docker\mosquitto.acl"
+          Set-Content -Path "$env:TEMP\mosquitto.conf" -Value "listener 1884`r`nallow_anonymous true`r`nacl_file $acl"
           Start-Process -FilePath "C:\Program Files\mosquitto\mosquitto.exe" -ArgumentList "-c $env:TEMP\mosquitto.conf" -WindowStyle Hidden
           Start-Sleep -Seconds 3
 
