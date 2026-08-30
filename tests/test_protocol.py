@@ -700,4 +700,3 @@ async def test_publish_qos2_rejected_pubrec_raises_no_pubrel_and_releases_packet
     assert len(transport.sent) == sent_before_ack  # no PUBREL sent
     assert protocol._state.packet_ids.acquire() == pid  # proves release: id is reused
     await _stop_task(read_task)
-
