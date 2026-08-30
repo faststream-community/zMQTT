@@ -12,6 +12,18 @@ subscription routing, bounded queues, and correlation-safe request/response.
 [PyPI](https://pypi.org/project/zmqtt/) ·
 [Changelog](https://github.com/faststream-community/zMQTT/blob/master/CHANGELOG.md)
 
+
+## What is MQTT?
+
+MQTT (Message Queuing Telemetry Transport) is a lightweight publish/subscribe
+messaging protocol designed for devices with limited resources and networks
+with low bandwidth or unstable connectivity. It became the de facto standard
+in the IoT world thanks to its minimal packet overhead: a fixed header takes
+as little as 2 bytes, which makes it cheap to send data even from small
+embedded devices over slow or unreliable networks.
+
+Official site: [mqtt.org](https://mqtt.org/)
+
 ## Why zmqtt?
 
 - **Application-facing subscriptions.** Each `Subscription` owns its filters,
