@@ -16,16 +16,29 @@ class PacketBuffer:
 
     def __init__(self, version: Literal["3.1.1", "5.0"] = "3.1.1") -> None:
         self._buf: bytearray = bytearray()
+        self._offset = 0
         self._version: Final = version
 
     def feed(self, data: bytes) -> None:
+        if self._offset:
+            del self._buf[: self._offset]
+            self._offset = 0
         self._buf += data
 
     def __iter__(self) -> Iterator[AnyPacket]:
         while True:
-            result = decode(bytes(self._buf), version=self._version)
+            # Decode through a view so that consumed bytes are skipped rather
+            # than copied out, and release it before yielding: callers abandon
+            # this iterator mid-flight and await inside it, and a bytearray
+            # cannot be resized while a memoryview on it is still exported.
+            view = memoryview(self._buf)[self._offset :]
+            try:
+                result = decode(view, version=self._version)
+            finally:
+                view.release()
+
             if result is None:
                 return
             packet, consumed = result
-            del self._buf[:consumed]
+            self._offset += consumed
             yield packet
