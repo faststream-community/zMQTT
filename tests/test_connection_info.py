@@ -140,7 +140,7 @@ async def test_explicit_client_id_takes_precedence() -> None:
         assert client.connection_info.effective_client_id == "explicit"
 
 
-@pytest.mark.parametrize("failure", [MQTTTimeoutError("timeout"), ValueError("crashed")])
+@pytest.mark.parametrize("failure", [MQTTTimeoutError("timeout"), OSError("connection reset"), ValueError("crashed")])
 async def test_background_failure_clears_snapshot(failure: Exception) -> None:
     transport = FakeTransport()
     transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))

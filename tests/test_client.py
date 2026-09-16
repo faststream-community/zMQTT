@@ -50,19 +50,22 @@ def test_mqtt_v311_rejects_will_properties() -> None:
 
 
 class FakeTransport:
-    """Minimal Transport: read() hangs until fed; tracks close()."""
+    """Minimal Transport: read() hangs until fed bytes or an error; tracks close()."""
 
     def __init__(self, feed: bytes | None = None) -> None:
         self.sent: list[bytes] = []
         self.closed = False
-        self._rx: deque[bytes] = deque()
+        self._rx: deque[bytes | Exception] = deque()
         if feed is not None:
             self._rx.append(feed)
 
     async def read(self, n: int) -> bytes:  # noqa: ARG002
         while not self._rx:  # noqa: ASYNC110
             await asyncio.sleep(0)
-        return self._rx.popleft()
+        item = self._rx.popleft()
+        if isinstance(item, Exception):
+            raise item
+        return item
 
     async def write(self, data: bytes) -> None:
         self.sent.append(data)
@@ -122,3 +125,41 @@ async def test_mqtt_connect_timeout_gives_up_after_max_attempts() -> None:
 
     assert len(made) == 1  # gave up after the single allowed attempt
     assert made[0].closed  # transport still cleaned up on give-up
+
+
+async def test_run_loop_reconnects_after_transport_oserror() -> None:
+    connack = encode(ConnAck(session_present=False, return_code=0), version="3.1.1")
+    first = FakeTransport(feed=connack)
+    retry = FakeTransport(feed=connack)
+    made: list[FakeTransport] = []
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        transport = (first, retry)[len(made)]
+        made.append(transport)
+        return transport
+
+    client = MQTTClient(
+        "localhost",
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None),
+        transport_factory=factory,
+    )
+
+    async with client:
+        assert client.connection_info.connection_id == 1
+        first._rx.append(OSError("connection reset"))
+
+        async def reconnected() -> None:
+            while True:
+                await asyncio.sleep(0)
+                info = client._connection_info
+                if info is not None and info.connection_id == 2:
+                    return
+
+        await asyncio.wait_for(reconnected(), timeout=2)
+
+        assert client._run_task is not None
+        assert not client._run_task.done()
+        assert len(made) == 2
+        assert first.closed
+        assert retry.is_connected
+        assert client.connection_info.connection_id == 2

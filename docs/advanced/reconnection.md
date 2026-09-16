@@ -2,7 +2,7 @@
 
 ## Default behaviour
 
-Reconnection is enabled by default and applies to both the **initial connection** and any subsequent connection loss. When a network-level error (`OSError`) occurs, the client waits and retries with exponential back-off. When a running connection drops (`MQTTDisconnectedError` or `MQTTTimeoutError`), it reconnects and re-subscribes automatically. Your `async for msg in sub` loop keeps waiting and resumes delivering messages once the connection is restored.
+Reconnection is enabled by default and applies to both the **initial connection** and any subsequent connection loss. When a network-level error (`OSError`) occurs, including during an established connection after an RST, route change, or VPN transition, the client waits and retries with exponential back-off. When a running connection drops (`MQTTDisconnectedError` or `MQTTTimeoutError`), it reconnects and re-subscribes automatically. Your `async for msg in sub` loop keeps waiting and resumes delivering messages once the connection is restored.
 
 A broker refusal (`MQTTConnectError`, e.g. wrong credentials) is never retried — it propagates immediately regardless of `ReconnectConfig`.
 

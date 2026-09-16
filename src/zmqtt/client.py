@@ -956,7 +956,7 @@ class MQTTClient:
                 await self._request_dispatcher.restore()
                 await protocol_run_task
 
-            except (MQTTDisconnectedError, MQTTTimeoutError):
+            except (MQTTDisconnectedError, MQTTTimeoutError, OSError):
                 self._connection_info = None
                 if not self._reconnect.enabled:
                     await self._notify_connection_recovery_failed()
