@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v0.2.3 (2026-09-22)
+
+### Bug Fixes
+
+- **transport**: Recover from socket errors and bound close
+  ([#103](https://github.com/faststream-community/zMQTT/pull/103),
+  [`0522de7`](https://github.com/faststream-community/zMQTT/commit/0522de7f9486e8b8e3ff7036f01b3d2ea92bf7eb))
+
+### Continuous Integration
+
+- **deps**: Bump astral-sh/setup-uv from 10.0.1 to 10.1.0 in the github-actions group
+  ([#102](https://github.com/faststream-community/zMQTT/pull/102),
+  [`49d1579`](https://github.com/faststream-community/zMQTT/commit/49d1579a258dd213a55ecef251ef2991be623b1f))
+
+### Features
+
+- **client**: Honor the server's Maximum QoS
+  ([#98](https://github.com/faststream-community/zMQTT/pull/98),
+  [`911e326`](https://github.com/faststream-community/zMQTT/commit/911e32662c30c59c7698e57cf6c783923705500d))
+
+- **client**: Report rejected UNSUBACK from Subscription.stop()
+  ([#100](https://github.com/faststream-community/zMQTT/pull/100),
+  [`1b77201`](https://github.com/faststream-community/zMQTT/commit/1b77201f59667d76f8dd2971956e130c7750f370))
+
+### Performance Improvements
+
+- **reader**: Stop copying the buffer once per packet
+  ([#101](https://github.com/faststream-community/zMQTT/pull/101),
+  [`b0ba5e2`](https://github.com/faststream-community/zMQTT/commit/b0ba5e271867d29ef6babffe21ab7764197b158c))
+
+
 ## v0.2.2 (2026-09-08)
 
 ### Bug Fixes
