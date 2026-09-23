@@ -113,3 +113,11 @@ class TestArtemisV5(BaseTestArtemis):
     host = "127.0.0.1"
     port = 1883
     version = "5.0"
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    @pytest.mark.xfail(
+        strict=False,
+        reason="Artemis race: queued message may arrive before CONNACK on session resume",
+    )
+    async def test_persistent_session_replay_waits_for_subscription(self, topic: str, qos: QoS) -> None:
+        await super().test_persistent_session_replay_waits_for_subscription(topic, qos)
