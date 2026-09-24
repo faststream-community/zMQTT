@@ -498,6 +498,45 @@ class BrokerTestBase(abc.ABC):
         await final_subscription.stop()
         await replayed_again.disconnect()
 
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_detach_preserves_unprocessed_messages_and_active_ack(
+        self,
+        topic: str,
+        qos: QoS,
+    ) -> None:
+        if not self.supports_persistent_sessions:
+            pytest.skip("Broker test configuration does not retain persistent sessions")
+        client_id = f"zmqtt-detach-{uuid.uuid4().hex[:8]}"
+        original = self.persistent_client(client_id=client_id)
+        await original.connect()
+        subscription = original.subscribe(topic, qos=qos, auto_ack=False, receive_buffer_size=1)
+        await subscription.start()
+
+        async with MQTTClient(self.host, self.port, version=self.version) as publisher:
+            await publisher.publish(topic, b"active", qos=qos)
+            active = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
+            await subscription.detach()
+            await asyncio.wait_for(active.ack(), timeout=5.0)
+            await publisher.publish(topic, b"queued", qos=qos)
+            await publisher.publish(topic, b"blocked", qos=qos)
+            assert subscription._queue.empty()
+            await asyncio.wait_for(original.publish(f"{topic}/response", b"done", qos=QoS.AT_LEAST_ONCE), timeout=5.0)
+            await original.disconnect()
+            await publisher.publish(topic, b"offline", qos=qos)
+
+        resumed = self.persistent_client(client_id=client_id)
+        await resumed.connect()
+        replay = resumed.subscribe(topic, qos=qos, auto_ack=False)
+        await replay.start()
+        received: set[bytes] = set()
+        for _ in range(3):
+            message = await asyncio.wait_for(replay.get_message(), timeout=5.0)
+            received.add(message.payload)
+            await message.ack()
+        assert received == {b"queued", b"blocked", b"offline"}
+        await replay.stop()
+        await resumed.disconnect()
+
     async def test_persistent_session_replay_respects_subscription_buffer(
         self,
         topic: str,

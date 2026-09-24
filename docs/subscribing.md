@@ -26,6 +26,18 @@ await sub.stop()
 
 `stop()` sends UNSUBSCRIBE, stops message delivery and returns the broker's UNSUBACK as an `UnsubscribeResult`, or `None` if none was received — for example after the connection was lost. It never raises: failures and rejections are logged as warnings. Exiting `async with` does the same and discards the result.
 
+For graceful shutdown of a persistent session, use `await sub.detach()` before
+`await client.disconnect()`. This stops local delivery without sending
+UNSUBSCRIBE, so the broker keeps the filter and can queue QoS 1/2 messages while
+the client is offline. `detach()` discards messages still waiting in the local
+subscription queue. With `auto_ack=False`, those messages and any newly received
+after detachment remain unacknowledged; messages already handed to a handler can
+still be acknowledged before disconnect. With `auto_ack=True`, a queued message
+may already have been acknowledged, so use manual acknowledgement when replay of
+unprocessed messages is required. A detached `Subscription` is terminal; create
+a new one after reconnecting. Cancel tasks already waiting in `get_message()`
+during shutdown. To remove the broker filter, use `stop()` instead.
+
 On MQTT 5.0 the broker may reject some filters (reason code `0x80` or above); they are listed in `failures`. The subscription stops anyway, but the broker may keep sending messages on a rejected filter — on a persistent session, across reconnects too.
 
 ```python

@@ -622,6 +622,51 @@ async def test_inbound_qos2_manual_ack_duplicate_ignored() -> None:
     await _stop_task(read_task)
 
 
+@pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+@pytest.mark.parametrize("auto_ack", [False, True])
+async def test_detached_subscription_does_not_ack_new_publish(qos: QoS, auto_ack: bool) -> None:
+    protocol, transport = make_protocol()
+    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))
+    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
+    entry = SubscriptionEntry(queue=asyncio.Queue(), actual_filter="t/#", auto_ack=auto_ack)
+    protocol._state.subscriptions.add("t/#", entry)
+    protocol.detach(["t/#"])
+    transport.sent.clear()
+
+    await protocol._handle_publish(
+        Publish(topic="t/x", payload=b"unprocessed", qos=qos, retain=False, dup=False, packet_id=1),
+    )
+
+    assert entry.queue.empty()
+    assert transport.sent == []
+    assert protocol._state.subscriptions.contains("t/#")
+
+
+@pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+async def test_detach_unblocks_full_subscription_queue_without_ack(qos: QoS) -> None:
+    protocol, transport = make_protocol()
+    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))
+    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
+    transport.sent.clear()
+    entry = SubscriptionEntry(queue=asyncio.Queue(maxsize=1), actual_filter="t/#", auto_ack=False)
+    protocol._state.subscriptions.add("t/#", entry)
+
+    def publish(packet_id: int) -> Publish:
+        return Publish(topic="t/x", payload=b"unprocessed", qos=qos, retain=False, dup=False, packet_id=packet_id)
+
+    await protocol._handle_publish(publish(1))
+    blocked_delivery = asyncio.create_task(protocol._handle_publish(publish(2)))
+    await asyncio.sleep(0)
+    assert not blocked_delivery.done()
+
+    protocol.detach(["t/#"])
+    entry.queue.get_nowait()  # detach() discards the queued message, freeing the waiting put()
+    await asyncio.wait_for(blocked_delivery, timeout=1.0)
+
+    assert entry.queue.empty()
+    assert transport.sent == []
+
+
 @pytest.mark.parametrize("reason_code", PUBLISH_FAILURE_CODES)
 async def test_publish_qos2_rejected_pubrec_raises_no_pubrel_and_releases_packet_id(reason_code: int) -> None:
     """publish() raises MQTTPublishError on a rejected PUBREC, sends no PUBREL, and frees the packet_id."""

@@ -12,6 +12,7 @@ class SubscriptionEntry:
     auto_ack: bool = True
     actual_filter: str = ""  # filter with broker-stripped subscription decorators removed
     subscription_identifier: int | None = None  # v5; echoed by the broker on PUBLISH
+    detached: bool = False
 
 
 @dataclass(slots=True)

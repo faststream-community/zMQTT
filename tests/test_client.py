@@ -6,7 +6,16 @@ from collections import deque
 
 import pytest
 
-from zmqtt import MQTTClient, MQTTTimeoutError, QoS, ReconnectConfig, Will, WillProperties, create_client
+from zmqtt import (
+    MQTTClient,
+    MQTTDisconnectedError,
+    MQTTTimeoutError,
+    QoS,
+    ReconnectConfig,
+    Will,
+    WillProperties,
+    create_client,
+)
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck
 from zmqtt._internal.packets.ping import PingReq, PingResp
@@ -207,3 +216,14 @@ async def test_disconnect_returns_during_reconnect_handshake() -> None:
 
     assert client._run_task is None
     assert retry.closed
+
+
+async def test_detach_rejects_new_reads() -> None:
+    client = MQTTClient("localhost")
+    subscription = client.subscribe("events")
+    client._subscriptions.append(subscription)
+
+    await subscription.detach()
+
+    with pytest.raises(MQTTDisconnectedError, match="Subscription detached"):
+        await subscription.get_message()

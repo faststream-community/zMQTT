@@ -438,6 +438,13 @@ class MQTTProtocol:
         async with self._subscription_guards.hold(filters):
             return await self._unsubscribe(filters)
 
+    def detach(self, filters: list[str]) -> None:
+        """Keep broker filters while disabling their local delivery."""
+        for filter_ in filters:
+            entry = self._state.subscriptions.get(filter_)
+            if entry is not None:
+                entry.detached = True
+
     async def _unsubscribe(self, filters: list[str]) -> tuple[tuple[str, ...], UnsubAck] | None:
         self._ensure_alive()
         observed_filters = [f for f in filters if self._state.subscriptions.has_response_observer(f)]

@@ -426,8 +426,8 @@ class InboundPublishFlow:
             msg = "Cannot publish without packet id"
             raise ValueError(msg)
         if recipient.auto_ack:
-            await self._deliver(recipient, ack_callback=None)
-            await self._complete(PubAck(packet_id=packet.packet_id))
+            if await self._deliver(recipient, ack_callback=None):
+                await self._complete(PubAck(packet_id=packet.packet_id))
         else:
             acked = False
 
@@ -467,6 +467,8 @@ class InboundPublishFlow:
         if packet.packet_id is None:
             msg = "Cannot publish without packet id"
             raise ValueError(msg)
+        if recipient.subscription is not None and recipient.subscription[1].detached:
+            return
         if recipient.auto_ack:
             self._state.inflight_qos2_in[packet.packet_id] = InboundQoS2Flight(
                 packet_id=packet.packet_id,
@@ -514,21 +516,28 @@ class InboundPublishFlow:
         self,
         recipient: InboundRecipient,
         ack_callback: Callable[[], Awaitable[None]] | None,
-    ) -> None:
+    ) -> bool:
         if recipient.request is not None:
             recipient.request.deliver()
-            return
+            return True
 
         subscription = recipient.subscription
         if subscription is None:
-            return
+            return True
 
         filter_, entry = subscription
+        if entry.detached:
+            return False
         message = recipient.message
         if not entry.auto_ack and ack_callback is not None:
             message._ack_callback = ack_callback  # noqa: SLF001 - internal delivery contract
         await entry.queue.put(message)
+        if entry.detached:
+            if not entry.queue.empty():
+                entry.queue.get_nowait()
+            return False
         log.debug("Delivered message for topic %r to filter %r", message.topic, filter_)
+        return True
 
     @staticmethod
     def _make_message(publish: Publish) -> Message:
