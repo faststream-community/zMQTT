@@ -5,7 +5,7 @@ import contextlib
 import logging
 from collections import deque
 from collections.abc import Awaitable, Callable
-from typing import Protocol, TypeAlias, cast
+from typing import Final, Protocol, TypeAlias, cast
 
 from zmqtt._internal.packets.codec import AnyPacket
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
@@ -18,13 +18,16 @@ from zmqtt.errors import MQTTProtocolError
 
 log = logging.getLogger("zmqtt.protocol")
 
+# MQTT 5.0 §3.3.4: DISCONNECT reason code for a server exceeding the client's Receive Maximum.
+_RECEIVE_MAXIMUM_EXCEEDED: Final = 0x93
+
 
 class InboundConnection(Protocol):
     """Wire operations needed by the inbound publish flow."""
 
     async def send_packet(self, packet: AnyPacket) -> None: ...
 
-    async def abort(self) -> None: ...
+    async def abort(self, reason_code: int | None = None) -> None: ...
 
 
 class _NoSessionReplay:
@@ -261,9 +264,13 @@ class InboundPublishFlow:
     and holds unmatched messages replayed by a resumed persistent session until
     a compatible local subscription becomes available. Connection lifecycle,
     packet decoding, and outbound publishing remain MQTTProtocol concerns.
+
+    With *receive_maximum*, the broker may leave at most that many QoS 1/2
+    messages without PUBACK or PUBCOMP (MQTT 5.0 §4.9); exceeding it closes
+    the connection with DISCONNECT 0x93.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         connection: InboundConnection,
@@ -271,6 +278,7 @@ class InboundPublishFlow:
         request_router: RequestRouter | None,
         session_replay_buffer_size: int,
         session_replay_timeout: float,
+        receive_maximum: int | None = None,
     ) -> None:
         self._connection = connection
         self._state = state
@@ -278,6 +286,8 @@ class InboundPublishFlow:
         self._session_replay_buffer_size = session_replay_buffer_size
         self._session_replay_timeout = session_replay_timeout
         self._replay: _ReplayState = _NO_SESSION_REPLAY
+        self._receive_maximum: Final = receive_maximum
+        self._unacknowledged: set[int] = set()
 
     def begin_session(self, *, session_present: bool) -> None:
         """Set whether this connection resumed broker-side session state."""
@@ -331,7 +341,7 @@ class InboundPublishFlow:
         if flight is None:
             msg = f"PUBREL for unknown packet_id {packet.packet_id}"
             raise MQTTProtocolError(msg)
-        await self._connection.send_packet(PubComp(packet_id=packet.packet_id))
+        await self._complete(PubComp(packet_id=packet.packet_id))
         if not flight.delivered:
             await self._deliver(flight.recipient, ack_callback=None)
 
@@ -399,6 +409,7 @@ class InboundPublishFlow:
         if packet.packet_id is None:
             msg = "Cannot publish without packet id"
             raise ValueError(msg)
+        await self._hold_receive_quota(packet.packet_id)
         if self._replay.contains_packet_id(packet.packet_id):
             return
         recipient = await self._select_recipient_or_buffer(packet)
@@ -416,7 +427,7 @@ class InboundPublishFlow:
             raise ValueError(msg)
         if recipient.auto_ack:
             await self._deliver(recipient, ack_callback=None)
-            await self._connection.send_packet(PubAck(packet_id=packet.packet_id))
+            await self._complete(PubAck(packet_id=packet.packet_id))
         else:
             acked = False
 
@@ -425,7 +436,7 @@ class InboundPublishFlow:
                 if acked:
                     return
                 acked = True
-                await self._connection.send_packet(PubAck(packet_id=cast("int", packet.packet_id)))
+                await self._complete(PubAck(packet_id=cast("int", packet.packet_id)))
 
             await self._deliver(recipient, ack_callback=_puback)
 
@@ -433,6 +444,7 @@ class InboundPublishFlow:
         if packet.packet_id is None:
             msg = "Cannot publish without packet id"
             raise ValueError(msg)
+        await self._hold_receive_quota(packet.packet_id)
         if packet.packet_id in self._state.inflight_qos2_in:
             # PUBREC already sent — resend it (duplicate PUBLISH after PUBREC)
             await self._connection.send_packet(PubRec(packet_id=packet.packet_id))
@@ -477,6 +489,26 @@ class InboundPublishFlow:
                 await self._connection.send_packet(PubRec(packet_id=pid))
 
             await self._deliver(recipient, ack_callback=_pubrec)
+
+    async def _hold_receive_quota(self, packet_id: int) -> None:
+        """Count a QoS 1/2 PUBLISH against Receive Maximum until PUBACK or PUBCOMP.
+
+        Replayed, buffered, and manually acknowledged messages keep their unit;
+        a duplicate packet ID reuses the unit it already holds.
+        """
+        self._unacknowledged.add(packet_id)
+        limit = self._receive_maximum
+        if limit is not None and len(self._unacknowledged) > limit:
+            await self._connection.abort(_RECEIVE_MAXIMUM_EXCEEDED)
+            msg = f"Broker exceeded the Receive Maximum of {limit} unacknowledged QoS 1/2 messages"
+            raise MQTTProtocolError(msg)
+
+    async def _complete(self, ack: PubAck | PubComp) -> None:
+        """Send the acknowledgement that ends an inbound QoS 1/2 flow."""
+        # Release first: the broker may answer this ack with a new PUBLISH that
+        # the read loop handles before a manual ack() caller resumes.
+        self._unacknowledged.discard(ack.packet_id)
+        await self._connection.send_packet(ack)
 
     async def _deliver(
         self,

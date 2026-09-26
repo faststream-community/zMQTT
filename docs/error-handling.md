@@ -127,6 +127,11 @@ for more detail.
 
 Raised when the broker sends a packet that violates the MQTT spec — wrong packet type in context, malformed header, etc. This usually indicates a broker bug or a mismatch between library version and broker behaviour.
 
+On MQTT 5.0 it is also raised when the broker exceeds the client's
+[`receive_maximum` or `maximum_packet_size`](advanced/mqtt5.md#connect-properties).
+The client sends DISCONNECT with the matching reason code and stops without
+reconnecting.
+
 ### `MQTTDisconnectedError`
 
 Raised when an operation cannot continue because the connection was lost. If reconnection is enabled (the default), transient connection failures are normally handled automatically.

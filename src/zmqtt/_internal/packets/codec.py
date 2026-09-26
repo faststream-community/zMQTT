@@ -53,11 +53,22 @@ from zmqtt._internal.types.retain_handling import RetainHandling
 
 # Re-export wire helpers so existing callers of ``from zmqtt._internal.packets.codec import …`` keep working.
 __all__ = [
+    "PacketTooLargeError",
     "decode",
     "decode_varint",
     "encode",
     "encode_varint",
 ]
+
+
+class PacketTooLargeError(ValueError):
+    """An incoming packet is larger than the receiver's Maximum Packet Size."""
+
+    def __init__(self, size: int, limit: int) -> None:
+        self.size = size
+        self.limit = limit
+        super().__init__(f"Packet of {size} bytes exceeds the Maximum Packet Size of {limit} bytes")
+
 
 AnyPacket = (
     Connect
@@ -542,12 +553,16 @@ def decode(
     buffer: bytes | memoryview,
     *,
     version: Literal["3.1.1", "5.0"] = "3.1.1",
+    max_packet_size: int | None = None,
 ) -> tuple[AnyPacket, int] | None:
     """Decode one packet from buffer.
 
     Returns (packet, bytes_consumed) or None if the buffer holds fewer bytes
     than the next complete packet requires.  Pass version="5.0" when operating
     in an MQTT 5.0 session (CONNECT auto-detects its own version regardless).
+
+    Raises PacketTooLargeError as soon as the fixed header shows a packet
+    larger than *max_packet_size*, before its body has to be buffered.
     """
     if len(buffer) < 2:
         return None
@@ -574,6 +589,8 @@ def decode(
         raise ValueError(msg)
 
     total = 1 + varint_bytes + remaining_length
+    if max_packet_size is not None and total > max_packet_size:
+        raise PacketTooLargeError(total, max_packet_size)
     if len(buffer) < total:
         return None  # packet body not yet fully received
 

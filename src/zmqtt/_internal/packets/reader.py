@@ -18,12 +18,20 @@ class PacketBuffer:
     and a ``bytearray`` cannot be resized while a view on it is exported, so a
     ``feed`` mid-iteration raises ``BufferError``. Leaving the loop early is
     fine: closing the iterator releases the view.
+
+    With *max_packet_size*, iteration raises ``PacketTooLargeError`` once the
+    fixed header of an oversized packet has arrived.
     """
 
-    def __init__(self, version: Literal["3.1.1", "5.0"] = "3.1.1") -> None:
+    def __init__(
+        self,
+        version: Literal["3.1.1", "5.0"] = "3.1.1",
+        max_packet_size: int | None = None,
+    ) -> None:
         self._buf: bytearray = bytearray()
         self._offset = 0
         self._version: Final = version
+        self._max_packet_size: Final = max_packet_size
 
     def feed(self, data: bytes) -> None:
         """Add bytes from one socket read, dropping whatever has been parsed."""
@@ -36,7 +44,7 @@ class PacketBuffer:
         view = memoryview(self._buf)
         try:
             while True:
-                result = decode(view[self._offset :], version=self._version)
+                result = decode(view[self._offset :], version=self._version, max_packet_size=self._max_packet_size)
                 if result is None:
                     return
                 packet, consumed = result

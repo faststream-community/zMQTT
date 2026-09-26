@@ -44,8 +44,9 @@ Subscription restoration may still be running when the snapshot becomes availabl
 
 Effective values describe negotiation; they do not change ping scheduling,
 future CONNECT IDs, or enforce broker limits. Response Information is the raw
-broker string and does not alter reply topics or `request()`. Requesting it in
-CONNECT is not currently exposed by the client configuration.
+broker string and does not alter reply topics or `request()`. Request it with
+[`request_response_information=True`](#connect-properties); the broker may
+still omit it.
 
 ## Session expiry interval
 
@@ -56,6 +57,52 @@ async with create_client("localhost", version="5.0", session_expiry_interval=360
     # Session survives for 1 hour after disconnect
     ...
 ```
+
+## CONNECT properties
+
+These [CONNECT properties](https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901046)
+are sent in every connection attempt, including reconnects:
+
+```python
+async with create_client(
+    "localhost",
+    version="5.0",
+    receive_maximum=10,
+    maximum_packet_size=64 * 1024,
+    user_properties=(("region", "eu"), ("region", "us")),
+    request_response_information=True,
+    request_problem_information=False,
+) as client:
+    ...
+```
+
+| Option | Accepted values | Broker default when omitted |
+|--------|-----------------|-----------------------------|
+| `receive_maximum` | `1`–`65535` | `65535` |
+| `maximum_packet_size` | `1`–`268435460` bytes | No limit |
+| `user_properties` | `(name, value)` string pairs | — |
+| `request_response_information` | `bool` | `False` |
+| `request_problem_information` | `bool` | `True` |
+
+Options left at their defaults (`None`, or `()` for `user_properties`) are
+omitted from CONNECT. An explicit value is always sent, even if it equals the
+broker default. User Properties keep their order, and names may repeat. Invalid
+values raise `ValueError` or `TypeError` when the client is created; using any
+of these options with `version="3.1.1"` raises `RuntimeError`.
+
+The client enforces the limits it advertises:
+
+- `receive_maximum` limits QoS 1 and QoS 2 messages that the broker may send
+  before the client answers with PUBACK or PUBCOMP. A message awaiting manual
+  [`ack()`](manual-ack.md) keeps its slot, so the broker pauses delivery once
+  that many messages are unacknowledged.
+- `maximum_packet_size` limits every packet the broker sends. Brokers drop an
+  oversized PUBLISH for this client instead of sending it. `268435460` is the
+  largest packet the MQTT encoding allows.
+
+A broker that exceeds either limit is disconnected with reason code `0x93`
+(Receive Maximum exceeded) or `0x95` (Packet too large). The client then stops
+with `MQTTProtocolError` and does not reconnect.
 
 ## Publish properties
 

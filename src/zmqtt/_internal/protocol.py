@@ -10,7 +10,7 @@ from typing import Final, Literal
 from zmqtt._internal import topic_matching
 from zmqtt._internal.inbound import InboundPublishFlow
 from zmqtt._internal.packets.auth import Auth
-from zmqtt._internal.packets.codec import AnyPacket, encode
+from zmqtt._internal.packets.codec import AnyPacket, PacketTooLargeError, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.ping import PingReq, PingResp
@@ -68,6 +68,9 @@ _UNSUBACK_REASON_NAMES: Final[dict[int, str]] = {
     0x8F: "Topic Filter invalid",
     0x91: "Packet Identifier in use",
 }
+
+# MQTT 5.0 §3.1.2.11.4: DISCONNECT reason code for a packet above the client's Maximum Packet Size.
+_PACKET_TOO_LARGE: Final = 0x95
 
 
 class _SubscriptionGuard:
@@ -177,6 +180,9 @@ class MQTTProtocol:
         request_router: RequestRouter | None = None,
         session_replay_buffer_size: int = 1000,
         session_replay_timeout: float = 30.0,
+        # Inbound limits to enforce; must match those advertised in CONNECT.
+        receive_maximum: int | None = None,
+        maximum_packet_size: int | None = None,
     ) -> None:
         self._transport = transport
         self._state = state
@@ -191,8 +197,9 @@ class MQTTProtocol:
             request_router=request_router,
             session_replay_buffer_size=session_replay_buffer_size,
             session_replay_timeout=session_replay_timeout,
+            receive_maximum=receive_maximum,
         )
-        self._buf = PacketBuffer(version=version)
+        self._buf = PacketBuffer(version=version, max_packet_size=maximum_packet_size)
         self._ping_waiters: list[asyncio.Future[None]] = []
         self._subscription_guards = _SubscriptionGuards()
         self._disconnecting = False
@@ -221,24 +228,35 @@ class MQTTProtocol:
             raise MQTTTimeoutError(msg) from e
 
     async def _await_connack(self) -> ConnAck:
-        while True:
-            data = await self._transport.read(4096)
-            self._buf.feed(data)
-            for pkt in self._buf:
-                if not isinstance(pkt, ConnAck):
-                    msg = f"Expected CONNACK, got {pkt!r}"
-                    raise MQTTProtocolError(msg)
-                if pkt.return_code != 0:
-                    raise MQTTConnectError(pkt.return_code, properties=pkt.properties)
-                log.info("Connected with session_present=%s", pkt.session_present)
-                if self._version == "5.0" and pkt.properties is not None:
-                    # Properties present but Maximum QoS absent: spec default is QoS 2.
-                    max_qos = pkt.properties.maximum_qos
-                    self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
-                else:  # 3.1.1 has no CONNACK properties: no limit.
-                    self._max_publish_qos = QoS.EXACTLY_ONCE
-                self.inbound.begin_session(session_present=pkt.session_present)
-                return pkt
+        async with self._rejecting_oversized_packets():
+            while True:
+                data = await self._transport.read(4096)
+                self._buf.feed(data)
+                for pkt in self._buf:
+                    if not isinstance(pkt, ConnAck):
+                        msg = f"Expected CONNACK, got {pkt!r}"
+                        raise MQTTProtocolError(msg)
+                    if pkt.return_code != 0:
+                        raise MQTTConnectError(pkt.return_code, properties=pkt.properties)
+                    log.info("Connected with session_present=%s", pkt.session_present)
+                    if self._version == "5.0" and pkt.properties is not None:
+                        # Properties present but Maximum QoS absent: spec default is QoS 2.
+                        max_qos = pkt.properties.maximum_qos
+                        self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
+                    else:  # 3.1.1 has no CONNACK properties: no limit.
+                        self._max_publish_qos = QoS.EXACTLY_ONCE
+                    self.inbound.begin_session(session_present=pkt.session_present)
+                    return pkt
+
+    @contextlib.asynccontextmanager
+    async def _rejecting_oversized_packets(self) -> AsyncGenerator[None]:
+        """Close with DISCONNECT 0x95 when the broker exceeds our Maximum Packet Size."""
+        try:
+            yield
+        except PacketTooLargeError as e:
+            await self.abort(_PACKET_TOO_LARGE)
+            msg = f"Broker sent a packet of {e.size} bytes, exceeding the Maximum Packet Size of {e.limit} bytes"
+            raise MQTTProtocolError(msg) from e
 
     async def run(self) -> None:
         """Run read loop and ping loop concurrently until disconnection."""
@@ -547,16 +565,17 @@ class MQTTProtocol:
         log.debug("Sent AUTH with reason_code=%d", packet.reason_code)
 
     async def _read_loop(self) -> None:
-        while True:
-            for packet in self._buf:
-                await self._dispatch(packet)
-            try:
-                data = await self._transport.read(4096)
-            except MQTTDisconnectedError:
-                if self._disconnecting:
-                    return
-                raise
-            self._buf.feed(data)
+        async with self._rejecting_oversized_packets():
+            while True:
+                for packet in self._buf:
+                    await self._dispatch(packet)
+                try:
+                    data = await self._transport.read(4096)
+                except MQTTDisconnectedError:
+                    if self._disconnecting:
+                        return
+                    raise
+                self._buf.feed(data)
 
     async def _ping_loop(self) -> None:
         while True:
@@ -684,8 +703,14 @@ class MQTTProtocol:
         """Send an encoded packet on behalf of an internal protocol flow."""
         await self._send(self._encode(packet))
 
-    async def abort(self) -> None:
-        """Close the transport after a terminal inbound-flow failure."""
+    async def abort(self, reason_code: int | None = None) -> None:
+        """Close the transport after a terminal failure.
+
+        On MQTT 5.0, *reason_code* is first sent in a best-effort DISCONNECT.
+        """
+        if reason_code is not None and self._version == "5.0":
+            with contextlib.suppress(Exception):
+                await self._send(self._encode(Disconnect(reason_code=reason_code)))
         await self._transport.close()
 
     async def _send(self, data: bytes) -> None:

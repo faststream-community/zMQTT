@@ -6,7 +6,7 @@ import dataclasses
 import logging
 import os
 import ssl
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, overload
 
@@ -54,7 +54,82 @@ _MAX_SUBSCRIPTION_IDENTIFIER = 268_435_455
 
 _UNSUBACK_REJECTION_THRESHOLD: Final = 0x80
 
+# MQTT 5.0 §3.1.2.11: CONNECT property value limits.
+_MAX_SESSION_EXPIRY_INTERVAL: Final = 0xFFFF_FFFF
+_MAX_RECEIVE_MAXIMUM: Final = 65_535
+# §2.1.4: 1-byte header + 4-byte Remaining Length of at most 268,435,455. The
+# property itself allows up to 2**32 - 1, but no larger packet can be decoded.
+_MAX_PACKET_SIZE: Final = 268_435_460
+# §1.5.4: UTF-8 Encoded Strings are length-prefixed by a Two Byte Integer.
+_MAX_STRING_BYTES: Final = 65_535
+
 log = logging.getLogger(__name__)
+
+
+def _validate_user_properties(pairs: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+    for pair in pairs:
+        if not (isinstance(pair, tuple) and len(pair) == 2 and all(isinstance(s, str) for s in pair)):  # noqa: PLR2004
+            msg = f"user_properties must contain (name, value) string pairs, got {pair!r}"
+            raise TypeError(msg)
+        for s in pair:
+            try:
+                size = len(s.encode())
+            except UnicodeEncodeError as e:
+                msg = f"user_properties strings must be valid UTF-8: {s!r}"
+                raise ValueError(msg) from e
+            if size > _MAX_STRING_BYTES:
+                msg = f"user_properties strings must not exceed {_MAX_STRING_BYTES} UTF-8 bytes"
+                raise ValueError(msg)
+            if "\x00" in s:
+                msg = f"user_properties strings must not contain U+0000: {s!r}"
+                raise ValueError(msg)
+    return tuple(pairs)
+
+
+def _build_connect_properties(
+    version: Literal["3.1.1", "5.0"],
+    *,
+    session_expiry_interval: int,
+    receive_maximum: int | None,
+    maximum_packet_size: int | None,
+    user_properties: Sequence[tuple[str, str]],
+    request_response_information: bool | None,
+    request_problem_information: bool | None,
+) -> ConnectProperties | None:
+    """Validate CONNECT properties once, so every (re)connect sends the same ones.
+
+    ``None`` means "omit the property", letting the broker apply the spec default.
+    """
+    configured = {
+        "receive_maximum": receive_maximum is not None,
+        "maximum_packet_size": maximum_packet_size is not None,
+        "user_properties": bool(user_properties),
+        "request_response_information": request_response_information is not None,
+        "request_problem_information": request_problem_information is not None,
+    }
+    if version != "5.0":
+        if any(configured.values()):
+            names = ", ".join(name for name, is_set in configured.items() if is_set)
+            msg = f"MQTT 5.0 is required for {names}"
+            raise RuntimeError(msg)
+        return None
+    if not 0 <= session_expiry_interval <= _MAX_SESSION_EXPIRY_INTERVAL:
+        msg = f"session_expiry_interval must be in 0..{_MAX_SESSION_EXPIRY_INTERVAL}"
+        raise ValueError(msg)
+    if receive_maximum is not None and not 1 <= receive_maximum <= _MAX_RECEIVE_MAXIMUM:
+        msg = f"receive_maximum must be in 1..{_MAX_RECEIVE_MAXIMUM}"
+        raise ValueError(msg)
+    if maximum_packet_size is not None and not 1 <= maximum_packet_size <= _MAX_PACKET_SIZE:
+        msg = f"maximum_packet_size must be in 1..{_MAX_PACKET_SIZE}"
+        raise ValueError(msg)
+    return ConnectProperties(
+        session_expiry_interval=session_expiry_interval,
+        receive_maximum=receive_maximum,
+        maximum_packet_size=maximum_packet_size,
+        request_response_information=request_response_information,
+        request_problem_information=request_problem_information,
+        user_properties=_validate_user_properties(user_properties),
+    )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -457,6 +532,11 @@ class MQTTClient:
         transport_factory: TransportFactory | None = None,
         version: Literal["3.1.1", "5.0"] = "3.1.1",
         session_expiry_interval: int = 0,
+        receive_maximum: int | None = None,
+        maximum_packet_size: int | None = None,
+        user_properties: Sequence[tuple[str, str]] = (),
+        request_response_information: bool | None = None,
+        request_problem_information: bool | None = None,
         stripped_prefixes: tuple[str, ...] = _DEFAULT_STRIPPED_PREFIXES,
         max_pending_requests: int = 1000,
         session_replay_buffer_size: int = 1000,
@@ -501,6 +581,24 @@ class MQTTClient:
                 ``"5.0"``.
             session_expiry_interval: MQTT 5.0 session expiry interval in seconds.
                 ``0`` means the session expires on disconnect.
+            receive_maximum: MQTT 5.0 limit (1..65535) on QoS 1/2 messages the
+                broker may send before they are acknowledged. Messages awaiting
+                manual :meth:`Message.ack` count against it. A broker exceeding
+                it is disconnected with reason code ``0x93``. ``None`` omits the
+                property (broker default 65535).
+            maximum_packet_size: MQTT 5.0 limit (1..268435460) on the size in
+                bytes of any packet the broker sends. A broker exceeding it is
+                disconnected with reason code ``0x95``. ``None`` omits the
+                property (no limit).
+            user_properties: MQTT 5.0 ``(name, value)`` pairs sent in CONNECT,
+                in order; names may repeat.
+            request_response_information: MQTT 5.0: ask the broker for Response
+                Information in CONNACK. ``None`` omits the property (broker
+                default ``False``).
+            request_problem_information: MQTT 5.0: set ``False`` to ask the
+                broker to omit Reason Strings and User Properties from packets
+                other than PUBLISH, CONNACK, and DISCONNECT. ``None`` omits the
+                property (broker default ``True``).
             stripped_prefixes: Group-less subscription prefixes the broker strips
                 before delivery — matched against incoming PUBLISH topics with the
                 prefix removed. Defaults to ``("$queue", "$exclusive")``; add a
@@ -515,6 +613,15 @@ class MQTTClient:
             session_replay_timeout: Seconds a persistent-session message may
                 remain in the replay buffer. Remaining messages are dropped
                 without acknowledgement after the timeout. Defaults to ``30.0``.
+
+        CONNECT properties are validated here and sent on every connection
+        attempt, including reconnects.
+
+        Raises:
+            ValueError: If a CONNECT property value is out of range or a User
+                Property string is not a valid MQTT UTF-8 string.
+            TypeError: If *user_properties* holds anything but string pairs.
+            RuntimeError: If an MQTT 5.0-only option is used with MQTT 3.1.1.
         """
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
@@ -528,6 +635,15 @@ class MQTTClient:
         if will is not None and will.properties is not None and version != "5.0":
             msg = "will properties require MQTT 5.0"
             raise RuntimeError(msg)
+        self._connect_properties = _build_connect_properties(
+            version,
+            session_expiry_interval=session_expiry_interval,
+            receive_maximum=receive_maximum,
+            maximum_packet_size=maximum_packet_size,
+            user_properties=user_properties,
+            request_response_information=request_response_information,
+            request_problem_information=request_problem_information,
+        )
         self._host = host
         self._port = port
         self._client_id = client_id
@@ -542,7 +658,6 @@ class MQTTClient:
         self._mqtt_connect_timeout = mqtt_connect_timeout
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._version: Final = version
-        self._session_expiry_interval = session_expiry_interval
         self._stripped_prefixes = stripped_prefixes
         self._request_dispatcher = _RequestDispatcher(max_pending_requests)
         self._session_replay_buffer_size = session_replay_buffer_size
@@ -872,6 +987,7 @@ class MQTTClient:
 
     async def _connect(self) -> None:
         transport = await self._transport_factory(self._host, self._port, self._tls)
+        connect_props = self._connect_properties
         protocol = MQTTProtocol(
             transport,
             SessionState(),
@@ -882,12 +998,9 @@ class MQTTClient:
             request_router=self._request_dispatcher,
             session_replay_buffer_size=self._session_replay_buffer_size,
             session_replay_timeout=self._session_replay_timeout,
+            receive_maximum=connect_props.receive_maximum if connect_props is not None else None,
+            maximum_packet_size=connect_props.maximum_packet_size if connect_props is not None else None,
         )
-        connect_props = None
-        if self._version == "5.0":
-            connect_props = ConnectProperties(
-                session_expiry_interval=self._session_expiry_interval,
-            )
         connect_packet = Connect(
             client_id=self._client_id,
             clean_session=self._clean_session,
@@ -1050,6 +1163,11 @@ def create_client(
     mqtt_connect_timeout: float = ...,
     transport_factory: TransportFactory | None = ...,
     session_expiry_interval: int = ...,
+    receive_maximum: int | None = ...,
+    maximum_packet_size: int | None = ...,
+    user_properties: Sequence[tuple[str, str]] = ...,
+    request_response_information: bool | None = ...,
+    request_problem_information: bool | None = ...,
     max_pending_requests: int = ...,
     session_replay_buffer_size: int = ...,
     session_replay_timeout: float = ...,
@@ -1073,6 +1191,11 @@ def create_client(
     mqtt_connect_timeout: float = 30.0,
     transport_factory: TransportFactory | None = None,
     session_expiry_interval: int = 0,
+    receive_maximum: int | None = None,
+    maximum_packet_size: int | None = None,
+    user_properties: Sequence[tuple[str, str]] = (),
+    request_response_information: bool | None = None,
+    request_problem_information: bool | None = None,
     max_pending_requests: int = 1000,
     session_replay_buffer_size: int = 1000,
     session_replay_timeout: float = 30.0,
@@ -1082,6 +1205,8 @@ def create_client(
 
     Returns MQTTClientV311 when version="3.1.1", MQTTClientV5 when version="5.0".
     The concrete type is always MQTTClient; the return type is a Protocol view.
+    MQTT 5.0-only CONNECT options are accepted only with ``version="5.0"``;
+    see :class:`MQTTClient` for all parameters.
     """
     return MQTTClient(
         host,
@@ -1099,6 +1224,11 @@ def create_client(
         transport_factory=transport_factory,
         version=version,
         session_expiry_interval=session_expiry_interval,
+        receive_maximum=receive_maximum,
+        maximum_packet_size=maximum_packet_size,
+        user_properties=user_properties,
+        request_response_information=request_response_information,
+        request_problem_information=request_problem_information,
         max_pending_requests=max_pending_requests,
         session_replay_buffer_size=session_replay_buffer_size,
         session_replay_timeout=session_replay_timeout,

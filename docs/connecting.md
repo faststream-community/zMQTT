@@ -115,13 +115,20 @@ async with create_client("broker.example.com", port=8883, tls=ctx) as client:
 | `mqtt_connect_timeout` | `30.0` | Seconds to wait for the broker's CONNACK before raising `MQTTTimeoutError` (must be `> 0`). Treated as retryable when reconnection is enabled. |
 | `transport_factory` | `None` | Optional low-level transport override, primarily for testing |
 | `session_expiry_interval` | `0` | MQTT 5.0 session expiry in seconds (ignored on 3.1.1) |
+| `receive_maximum` | `None` | MQTT 5.0 limit on unacknowledged QoS 1/2 messages from the broker |
+| `maximum_packet_size` | `None` | MQTT 5.0 limit on the size of packets from the broker |
+| `user_properties` | `()` | MQTT 5.0 User Properties sent in CONNECT |
+| `request_response_information` | `None` | MQTT 5.0 request for Response Information in CONNACK |
+| `request_problem_information` | `None` | MQTT 5.0 request for Reason Strings and User Properties on errors |
 | `session_replay_buffer_size` | `1000` | Maximum unmatched messages held while a resumed persistent session waits for local subscriptions; `0` is unbounded |
 | `session_replay_timeout` | `30.0` | Seconds unmatched persistent-session replay may wait before it is dropped locally without acknowledgement |
 | `stripped_prefixes` | `("$queue", "$exclusive")` | Broker subscription prefixes removed before local topic matching; `$share/<group>/` is always supported |
 | `max_pending_requests` | `1000` | Maximum concurrent MQTT 5 `request()` calls; additional calls wait before publishing |
 | `version` | `"3.1.1"` | Protocol version: `"3.1.1"` or `"5.0"` |
 
-See [Reconnection](advanced/reconnection.md) for `ReconnectConfig`,
+See [MQTT 5.0 — CONNECT properties](advanced/mqtt5.md#connect-properties) for
+the MQTT 5.0-only options,
+[Reconnection](advanced/reconnection.md) for `ReconnectConfig`,
 [Persistent Sessions](advanced/persistent-sessions.md) for durable broker-side
 sessions and startup replay,
 [Scaling](advanced/scaling.md) for subscription-prefix matching, and

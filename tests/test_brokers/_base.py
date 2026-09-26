@@ -816,6 +816,84 @@ class BrokerTestBase(abc.ABC):
             assert new.effective_client_id == old.effective_client_id == client_id
             assert attempts == 3
 
+    async def test_connect_properties_are_accepted(self, topic: str) -> None:
+        if self.version != "5.0":
+            pytest.skip("CONNECT properties require MQTT 5.0")
+        async with (
+            create_client(
+                self.host,
+                self.port,
+                version="5.0",
+                receive_maximum=10,
+                maximum_packet_size=4096,
+                user_properties=(("zmqtt", "first"), ("zmqtt", "second")),
+                request_response_information=True,
+                request_problem_information=False,
+            ) as client,
+            client.subscribe(topic, qos=QoS.AT_LEAST_ONCE) as sub,
+        ):
+            await client.publish(topic, b"accepted", qos=QoS.AT_LEAST_ONCE)
+            msg = await asyncio.wait_for(sub.get_message(), timeout=5.0)
+
+        assert msg.payload == b"accepted"
+
+    async def test_receive_maximum_holds_deliveries_until_ack(self, topic: str) -> None:
+        if self.version != "5.0":
+            pytest.skip("Receive Maximum requires MQTT 5.0")
+        async with (
+            MQTTClient(self.host, self.port, version=self.version, receive_maximum=1) as client,
+            client.subscribe(topic, qos=QoS.AT_LEAST_ONCE, auto_ack=False) as sub,
+            MQTTClient(self.host, self.port, version=self.version) as publisher,
+        ):
+            await publisher.publish(topic, b"first", qos=QoS.AT_LEAST_ONCE)
+            await publisher.publish(topic, b"second", qos=QoS.AT_LEAST_ONCE)
+            first = await asyncio.wait_for(sub.get_message(), timeout=5.0)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(sub.get_message(), timeout=0.5)
+            await first.ack()
+            second = await asyncio.wait_for(sub.get_message(), timeout=5.0)
+            await second.ack()
+
+        assert {first.payload, second.payload} == {b"first", b"second"}
+
+    async def test_maximum_packet_size_applies_after_reconnect(self, topic: str) -> None:
+        if self.version != "5.0":
+            pytest.skip("Maximum Packet Size requires MQTT 5.0")
+        client = MQTTClient(
+            self.host,
+            self.port,
+            version=self.version,
+            maximum_packet_size=512,
+            reconnect=ReconnectConfig(initial_delay=0),
+        )
+        async with (
+            client,
+            client.subscribe(topic, qos=QoS.AT_LEAST_ONCE) as sub,
+            MQTTClient(self.host, self.port, version=self.version) as publisher,
+        ):
+
+            async def receive_only_small_messages() -> None:
+                # The broker must drop the oversized message; if it sent it, the
+                # client would disconnect and get_message() would raise.
+                await publisher.publish(topic, b"x" * 1024, qos=QoS.AT_LEAST_ONCE)
+                await publisher.publish(topic, b"small", qos=QoS.AT_LEAST_ONCE)
+                while (await asyncio.wait_for(sub.get_message(), timeout=5.0)).payload != b"small":
+                    pass
+
+            await receive_only_small_messages()
+            await self.force_tcp_disconnect(client)
+            for _ in range(50):
+                await publisher.publish(topic, b"probe")
+                try:
+                    await asyncio.wait_for(sub.get_message(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                break
+            else:
+                pytest.fail("Subscription did not recover within 5 s")
+            assert client.connection_info.connection_id == 2
+            await receive_only_small_messages()
+
     async def test_context_manager_manual_pub_sub(self, topic: str) -> None:
         async with MQTTClient(
             self.host,

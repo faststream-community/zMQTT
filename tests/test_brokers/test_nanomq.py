@@ -20,6 +20,12 @@ class BaseTestNanoMQ(BrokerTestBase):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(sub.get_message(), timeout=0.2)
 
+    async def test_receive_maximum_holds_deliveries_until_ack(self, topic: str) -> None:  # noqa: ARG002
+        """NanoMQ drops QoS 1 messages that exceed the client's Receive Maximum
+        instead of queueing them until an acknowledgement frees the quota.
+        """
+        pytest.skip("NanoMQ drops messages beyond the client's Receive Maximum")
+
 
 class TestNanoMQV311(BaseTestNanoMQ):
     host = "127.0.0.1"

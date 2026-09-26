@@ -36,6 +36,19 @@ For QoS 2 messages (`EXACTLY_ONCE`), `ack()` sends PUBREC. The library then hand
 
 Between receiving the initial PUBLISH and calling `ack()`, PUBREC has not been sent, so the broker may retransmit the PUBLISH. Retransmitted PUBLISH packets for that delivery are ignored while the same connection remains active and the message is still unacknowledged.
 
+## Limiting unacknowledged messages (MQTT 5.0)
+
+`receive_maximum` limits how many QoS 1 and QoS 2 messages the broker sends
+before they are acknowledged. With manual ack, it bounds the messages your
+application holds without calling `ack()`:
+
+```python
+client = create_client("localhost", version="5.0", receive_maximum=10)
+```
+
+The broker pauses delivery at the limit and resumes when `ack()` frees a slot.
+See [CONNECT properties](mqtt5.md#connect-properties).
+
 ## Connection loss before `ack()`
 
 Manual acknowledgement alone does not preserve an unacknowledged delivery across reconnects. Broker redelivery requires a stable `client_id` and a persistent session:

@@ -271,8 +271,9 @@ async with create_client("localhost", version="5.0") as client:
     )
 ```
 
-MQTT 5 also adds session expiry, subscription identifiers, `no_local`, retain
-handling, publish properties, and a low-level AUTH packet API.
+MQTT 5 also adds session expiry, CONNECT properties such as receive limits,
+subscription identifiers, `no_local`, retain handling, publish properties, and
+a low-level AUTH packet API.
 
 ## Learn more
 
