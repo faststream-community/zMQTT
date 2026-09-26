@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator, Iterable
 from typing import Final, Literal
 
 from zmqtt._internal import topic_matching
+from zmqtt._internal._compat import wait_for
 from zmqtt._internal.inbound import InboundPublishFlow
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.codec import AnyPacket, encode
@@ -215,7 +216,7 @@ class MQTTProtocol:
         try:
             # No asyncio.shield (unlike ping): on timeout the transport is closed and
             # replaced by _connect_with_retry, so keeping the read coroutine alive is pointless.
-            return await asyncio.wait_for(self._await_connack(), timeout=self._connect_timeout)
+            return await wait_for(self._await_connack(), timeout=self._connect_timeout)
         except asyncio.TimeoutError as e:
             msg = "CONNACK not received within timeout"
             raise MQTTTimeoutError(msg) from e
@@ -529,7 +530,7 @@ class MQTTProtocol:
         await self._send(self._encode(PingReq()))
         log.debug("Sent PINGREQ")
         try:
-            await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            await wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError as e:
             self._ping_waiters.remove(future)
             msg = "PINGRESP not received within timeout"

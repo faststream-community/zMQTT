@@ -71,8 +71,11 @@ line-length = 120
 select = ["ALL"]
 ignore = ["D", "COM812", "TC001"]
 
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"asyncio.wait_for".msg = "Use zmqtt._internal._compat.wait_for: before Python 3.12 asyncio.wait_for can hide a cancellation"
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "D", "PLR2004", "SLF001", "FBT001"]
+"tests/**" = ["S101", "D", "PLR2004", "SLF001", "FBT001", "TID251"]
 "src/zmqtt/_internal/protocol.py" = ["SLF001", "PLR2004", "PLR0913"]
 "src/zmqtt/_internal/packets/codec.py" = ["PLR", "C901"]
 "src/zmqtt/client.py" = ["PLR0913", "SLF001", "FBT"]

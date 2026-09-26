@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 from typing import Protocol, runtime_checkable
 
+from zmqtt._internal._compat import wait_for
 from zmqtt.errors import MQTTDisconnectedError
 
 _DRAIN_TIMEOUT_SECONDS = 30.0
@@ -48,7 +49,7 @@ class StreamTransport:
     async def write(self, data: bytes) -> None:
         try:
             self._writer.write(data)
-            await asyncio.wait_for(self._writer.drain(), timeout=_DRAIN_TIMEOUT_SECONDS)
+            await wait_for(self._writer.drain(), timeout=_DRAIN_TIMEOUT_SECONDS)
         except (OSError, asyncio.TimeoutError) as exc:
             # The file descriptor is released by close(), same as on the read side.
             self._closed = True
@@ -61,7 +62,7 @@ class StreamTransport:
             self._writer_closed = True
             self._writer.close()
         try:
-            await asyncio.wait_for(self._writer.wait_closed(), timeout=_CLOSE_TIMEOUT_SECONDS)
+            await wait_for(self._writer.wait_closed(), timeout=_CLOSE_TIMEOUT_SECONDS)
         except Exception:  # noqa: BLE001 - a hung or failed close must not block reconnect
             with contextlib.suppress(Exception):
                 self._writer.transport.abort()

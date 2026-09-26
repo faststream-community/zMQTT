@@ -9,6 +9,8 @@ import pytest
 from zmqtt import MQTTClient, MQTTTimeoutError, QoS, ReconnectConfig, Will, WillProperties, create_client
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck
+from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.types import PacketType
 from zmqtt._internal.transport.base import Transport
 
 
@@ -76,6 +78,21 @@ class FakeTransport:
     @property
     def is_connected(self) -> bool:
         return not self.closed
+
+
+class LiveBrokerTransport(FakeTransport):
+    """FakeTransport that answers every PINGREQ and signals when CONNECT is sent."""
+
+    def __init__(self, feed: bytes | None = None) -> None:
+        super().__init__(feed)
+        self.connect_sent = asyncio.Event()
+
+    async def write(self, data: bytes) -> None:
+        await super().write(data)
+        if data[0] >> 4 == PacketType.CONNECT:
+            self.connect_sent.set()
+        elif data == encode(PingReq(), version="3.1.1"):
+            self._rx.append(encode(PingResp(), version="3.1.1"))
 
 
 async def test_connect_retries_after_connack_timeout() -> None:
@@ -163,3 +180,30 @@ async def test_run_loop_reconnects_after_transport_oserror() -> None:
         assert first.closed
         assert retry.is_connected
         assert client.connection_info.connection_id == 2
+
+
+async def test_disconnect_returns_during_reconnect_handshake() -> None:
+    # Before Python 3.12, asyncio.wait_for() returned CONNACK instead of raising
+    # the cancellation from disconnect(), which then waited for a healthy run loop.
+    connack = encode(ConnAck(session_present=False, return_code=0), version="3.1.1")
+    first = LiveBrokerTransport(feed=connack)
+    retry = LiveBrokerTransport(feed=connack)
+    transports = iter((first, retry))
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        return next(transports)
+
+    client = MQTTClient(
+        "localhost",
+        keepalive=1,
+        reconnect=ReconnectConfig(initial_delay=0.0),
+        transport_factory=factory,
+    )
+    await client.connect()
+    first._rx.append(OSError("connection reset"))
+    await retry.connect_sent.wait()
+
+    await asyncio.wait_for(client.disconnect(), timeout=3)
+
+    assert client._run_task is None
+    assert retry.closed

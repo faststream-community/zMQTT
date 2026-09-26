@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, overload
 
-from zmqtt._internal._compat import Self, defer_cancellation
+from zmqtt._internal._compat import Self, defer_cancellation, wait_for
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.connect import ConnAck, Connect, Will
 from zmqtt._internal.packets.properties import (
@@ -845,7 +845,7 @@ class MQTTClient:
         pending = await self._request_dispatcher.register(reply_topic, corr)
         try:
             await self.publish(topic, payload, qos=qos, properties=req_props)
-            return await asyncio.wait_for(pending.future, timeout=timeout)
+            return await wait_for(pending.future, timeout=timeout)
         finally:
             await pending.close()
 
