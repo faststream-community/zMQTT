@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.2.4 (2026-09-28)
+
+### Bug Fixes
+
+- Stop wait_for from hiding cancellation on Python 3.10 and 3.11
+  ([#111](https://github.com/faststream-community/zMQTT/pull/111),
+  [`aea9ac9`](https://github.com/faststream-community/zMQTT/commit/aea9ac96e38b4b9bfa15d866b74b8b1100e9a502))
+
+### Features
+
+- **client**: Expose MQTT 5 CONNECT properties
+  ([#109](https://github.com/faststream-community/zMQTT/pull/109),
+  [`895429d`](https://github.com/faststream-community/zMQTT/commit/895429d07c38c04034ddb77d02e289c1828a9e00))
+
+### Testing
+
+- **artemis**: Xfail flaky persistent session replay test
+  ([#106](https://github.com/faststream-community/zMQTT/pull/106),
+  [`e6536fe`](https://github.com/faststream-community/zMQTT/commit/e6536fe7f94250154b0faab067a66997100230ac))
+
+
 ## v0.2.3 (2026-09-22)
 
 ### Bug Fixes
