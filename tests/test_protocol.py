@@ -12,6 +12,7 @@ from typing import Literal
 
 import pytest
 
+from zmqtt import MQTTClient
 from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
@@ -648,7 +649,12 @@ async def test_detach_unblocks_full_subscription_queue_without_ack(qos: QoS) -> 
     transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))
     await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
     transport.sent.clear()
-    entry = SubscriptionEntry(queue=asyncio.Queue(maxsize=1), actual_filter="t/#", auto_ack=False)
+    client = MQTTClient("localhost")
+    client._protocol = protocol
+    subscription = client.subscribe("t/#", qos=qos, auto_ack=False, receive_buffer_size=1)
+    client._subscriptions.append(subscription)
+    subscription._registered_filters = ["t/#"]
+    entry = SubscriptionEntry(queue=subscription._queue, actual_filter="t/#", auto_ack=False)
     protocol._state.subscriptions.add("t/#", entry)
 
     def publish(packet_id: int) -> Publish:
@@ -659,8 +665,7 @@ async def test_detach_unblocks_full_subscription_queue_without_ack(qos: QoS) -> 
     await asyncio.sleep(0)
     assert not blocked_delivery.done()
 
-    protocol.detach(["t/#"])
-    entry.queue.get_nowait()  # detach() discards the queued message, freeing the waiting put()
+    await subscription.detach()
     await asyncio.wait_for(blocked_delivery, timeout=1.0)
 
     assert entry.queue.empty()

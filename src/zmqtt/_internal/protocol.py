@@ -407,7 +407,14 @@ class MQTTProtocol:
 
         for req in filters:
             f = req.topic_filter
-            if self._state.subscriptions.contains(f):
+            existing = self._state.subscriptions.get(f)
+            if existing is not None and existing.detached:
+                log.warning(
+                    "Filter %r is detached; the new subscription will not receive messages. "
+                    "Disconnect and connect the client before subscribing again.",
+                    f,
+                )
+            elif existing is not None:
                 log.warning("Filter %r already subscribed (ignored)", f)
             else:
                 new_entries[f] = SubscriptionEntry(
@@ -438,12 +445,19 @@ class MQTTProtocol:
         async with self._subscription_guards.hold(filters):
             return await self._unsubscribe(filters)
 
-    def detach(self, filters: list[str]) -> None:
+    def detach(self, filters: list[str]) -> dict[str, SubscriptionEntry]:
         """Keep broker filters while disabling their local delivery."""
+        detached: dict[str, SubscriptionEntry] = {}
         for filter_ in filters:
             entry = self._state.subscriptions.get(filter_)
             if entry is not None:
                 entry.detached = True
+                detached[filter_] = entry
+        return detached
+
+    def restore_detached(self, entries: dict[str, SubscriptionEntry]) -> None:
+        """Restore local ACK suppression without sending SUBSCRIBE."""
+        self._state.subscriptions.add_many(entries)
 
     async def _unsubscribe(self, filters: list[str]) -> tuple[tuple[str, ...], UnsubAck] | None:
         self._ensure_alive()

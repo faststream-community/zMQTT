@@ -28,6 +28,7 @@
       members:
         - start
         - stop
+        - detach
         - get_message
         - __aenter__
         - __aexit__

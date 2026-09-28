@@ -4,9 +4,48 @@ import pytest
 
 from tests.test_brokers._base import BrokerTestBase
 from zmqtt import MQTTClient, QoS, Subscription
+from zmqtt._internal.types.message import Message
 
 
 class BaseTestEMQX(BrokerTestBase):
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    async def test_detach_releases_read_loop_for_handler_reply(
+        self,
+        topic: str,
+        qos: QoS,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # EMQX pipelines unacknowledged deliveries, so a handler can remain
+        # active while another delivery blocks on the full subscription queue.
+        async with (
+            MQTTClient(self.host, self.port, version=self.version) as client,
+            MQTTClient(self.host, self.port, version=self.version) as publisher,
+        ):
+            subscription = client.subscribe(topic, qos=qos, auto_ack=False, receive_buffer_size=1)
+            blocked = asyncio.Event()
+            put = subscription._queue.put
+
+            async def observe_put(message: Message) -> None:
+                if subscription._queue.full():
+                    blocked.set()
+                await put(message)
+
+            monkeypatch.setattr(subscription._queue, "put", observe_put)
+            await subscription.start()
+            await publisher.publish(topic, b"active", qos=qos)
+            active = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
+            await publisher.publish(topic, b"queued", qos=qos)
+            await publisher.publish(topic, b"blocked", qos=qos)
+            await asyncio.wait_for(blocked.wait(), timeout=5.0)
+
+            await subscription.detach()
+            await asyncio.wait_for(active.ack(), timeout=5.0)
+            await asyncio.wait_for(
+                client.publish(f"{topic}/response", b"done", qos=QoS.AT_LEAST_ONCE),
+                timeout=5.0,
+            )
+            assert subscription._queue.empty()
+
     async def handle_sub_duplicates(
         self,
         *,

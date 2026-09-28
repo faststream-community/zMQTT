@@ -29,6 +29,8 @@ from zmqtt import (
     WillProperties,
     create_client,
 )
+from zmqtt._internal.packets.publish import Publish
+from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
 
@@ -515,12 +517,12 @@ class BrokerTestBase(abc.ABC):
         async with MQTTClient(self.host, self.port, version=self.version) as publisher:
             await publisher.publish(topic, b"active", qos=qos)
             active = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
-            await subscription.detach()
-            await asyncio.wait_for(active.ack(), timeout=5.0)
             await publisher.publish(topic, b"queued", qos=qos)
             await publisher.publish(topic, b"blocked", qos=qos)
-            assert subscription._queue.empty()
+            await subscription.detach()
+            await asyncio.wait_for(active.ack(), timeout=5.0)
             await asyncio.wait_for(original.publish(f"{topic}/response", b"done", qos=QoS.AT_LEAST_ONCE), timeout=5.0)
+            await publisher.publish(topic, b"after-detach", qos=qos)
             await original.disconnect()
             await publisher.publish(topic, b"offline", qos=qos)
 
@@ -529,13 +531,113 @@ class BrokerTestBase(abc.ABC):
         replay = resumed.subscribe(topic, qos=qos, auto_ack=False)
         await replay.start()
         received: set[bytes] = set()
-        for _ in range(3):
+        for _ in range(4):
             message = await asyncio.wait_for(replay.get_message(), timeout=5.0)
             received.add(message.payload)
             await message.ack()
-        assert received == {b"queued", b"blocked", b"offline"}
+        assert received == {b"queued", b"blocked", b"after-detach", b"offline"}
         await replay.stop()
         await resumed.disconnect()
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    @pytest.mark.parametrize("auto_ack", [False, True])
+    async def test_detach_preserves_messages_across_automatic_reconnect(
+        self,
+        topic: str,
+        qos: QoS,
+        auto_ack: bool,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        if not self.supports_persistent_sessions:
+            pytest.skip("Broker test configuration does not retain persistent sessions")
+        received: asyncio.Queue[bytes] = asyncio.Queue()
+        handle_publish = MQTTProtocol._handle_publish
+
+        async def observe_publish(protocol: MQTTProtocol, packet: Publish) -> None:
+            await handle_publish(protocol, packet)
+            if packet.topic == topic:
+                received.put_nowait(packet.payload)
+
+        monkeypatch.setattr(MQTTProtocol, "_handle_publish", observe_publish)
+        client = MQTTClient(
+            self.host,
+            self.port,
+            client_id=f"zmqtt-detach-reconnect-{uuid.uuid4().hex[:8]}",
+            clean_session=False,
+            version=self.version,
+            session_expiry_interval=60 if self.version == "5.0" else 0,
+            session_replay_timeout=0.05,
+            reconnect=ReconnectConfig(initial_delay=0.01),
+        )
+        async with client, MQTTClient(self.host, self.port, version=self.version) as publisher:
+            subscription = client.subscribe(
+                f"{topic}/#",
+                qos=qos,
+                auto_ack=auto_ack,
+                subscription_identifier=7 if self.version == "5.0" else None,
+            )
+            await subscription.start()
+            await subscription.detach()
+            await self.force_tcp_disconnect(client)
+
+            async def wait_for_reconnect() -> None:
+                while client._connection_info is None or client._connection_info.connection_id < 2:  # noqa: ASYNC110
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_reconnect(), timeout=5.0)
+            assert client.connection_info.session_present
+            await publisher.publish(topic, b"first", qos=qos)
+            assert await asyncio.wait_for(received.get(), timeout=5.0) == b"first"
+            # Exercise delivery after the unmatched-session replay grace period.
+            await asyncio.sleep(0.15)
+            await publisher.publish(topic, b"second", qos=qos)
+            # Some brokers wait for first's ACK before sending second. A later
+            # resume still has to deliver both, whichever in-flight window is used.
+            await client.ping()
+            await asyncio.sleep(0.15)
+            await client.disconnect()
+            await publisher.publish(topic, b"offline", qos=qos)
+
+            # Reusing the same client proves explicit disconnect clears the guard.
+            await client.connect()
+            async with client.subscribe(f"{topic}/#", qos=qos, auto_ack=False) as replay:
+                payloads = set()
+                for _ in range(3):
+                    message = await asyncio.wait_for(replay.get_message(), timeout=5.0)
+                    payloads.add(message.payload)
+                    await message.ack()
+                assert payloads == {b"first", b"second", b"offline"}
+
+    async def test_stop_after_disconnect_allows_restart(self, topic: str) -> None:
+        async with MQTTClient(self.host, self.port, version=self.version) as client:
+            subscription = client.subscribe(topic)
+            await subscription.start()
+            await client.disconnect()
+            await subscription.stop()
+            await client.connect()
+            await subscription.start()
+            await client.publish(topic, b"restarted")
+            message = await asyncio.wait_for(subscription.get_message(), timeout=5.0)
+            assert message.payload == b"restarted"
+            await subscription.stop()
+
+    async def test_subscribe_to_detached_filter_warns(
+        self,
+        topic: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        async with MQTTClient(self.host, self.port, version=self.version) as client:
+            subscription = client.subscribe(topic)
+            await subscription.start()
+            await subscription.detach()
+            with pytest.raises(RuntimeError, match="cannot be restarted"):
+                await subscription.start()
+            replacement = client.subscribe(topic)
+            with caplog.at_level(logging.WARNING, logger="zmqtt.protocol"):
+                await replacement.start()
+            assert f"Filter {topic!r} is detached" in caplog.text
+            assert "Disconnect and connect the client" in caplog.text
+            await replacement.stop()
 
     async def test_persistent_session_replay_respects_subscription_buffer(
         self,

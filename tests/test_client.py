@@ -3,6 +3,7 @@
 import asyncio
 import ssl
 from collections import deque
+from typing import Literal
 
 import pytest
 
@@ -19,7 +20,9 @@ from zmqtt import (
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck
 from zmqtt._internal.packets.ping import PingReq, PingResp
+from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.types import PacketType
+from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.transport.base import Transport
 
 
@@ -227,3 +230,73 @@ async def test_detach_rejects_new_reads() -> None:
 
     with pytest.raises(MQTTDisconnectedError, match="Subscription detached"):
         await subscription.get_message()
+
+
+@pytest.mark.parametrize("version", ["3.1.1", "5.0"])
+@pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+@pytest.mark.parametrize("during_handshake", [False, True])
+async def test_detach_survives_reconnect_before_first_publish(
+    version: Literal["3.1.1", "5.0"],
+    qos: QoS,
+    during_handshake: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = LiveBrokerTransport(feed=encode(ConnAck(session_present=False, return_code=0), version=version))
+    retry = LiveBrokerTransport()
+    transports = iter((first, retry))
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        return next(transports)
+
+    client = MQTTClient(
+        "localhost",
+        version=version,
+        clean_session=False,
+        session_expiry_interval=60 if version == "5.0" else 0,
+        reconnect=ReconnectConfig(initial_delay=0),
+        transport_factory=factory,
+        session_replay_timeout=0.01,
+    )
+    reconnected = asyncio.Event()
+    connect = client._connect
+
+    async def observe_connect() -> None:
+        await connect()
+        if client.connection_info.connection_id == 2:
+            reconnected.set()
+
+    monkeypatch.setattr(client, "_connect", observe_connect)
+    async with client:
+        subscription = client.subscribe("t/#", qos=qos, auto_ack=False)
+        subscription._registered_filters = ["t/#"]
+        client._subscriptions.append(subscription)
+        assert client._protocol is not None
+        client._protocol._state.subscriptions.add(
+            "t/#",
+            SubscriptionEntry(queue=subscription._queue, actual_filter="t/#", auto_ack=False),
+        )
+        if not during_handshake:
+            await subscription.detach()
+        first._rx.append(OSError("connection reset"))
+        await asyncio.wait_for(retry.connect_sent.wait(), timeout=1)
+        if during_handshake:
+            # The subscription has already been captured in subs_to_restore.
+            await subscription.detach()
+
+        def publish(packet_id: int) -> bytes:
+            return encode(
+                Publish(topic="t/x", payload=b"unprocessed", qos=qos, retain=False, dup=False, packet_id=packet_id),
+                version=version,
+            )
+
+        retry._rx.append(encode(ConnAck(session_present=True, return_code=0), version=version) + publish(1))
+        await asyncio.wait_for(reconnected.wait(), timeout=1)
+        await client.ping(timeout=1)
+        await asyncio.sleep(0.03)
+        retry._rx.append(publish(2))
+        await client.ping(timeout=1)
+
+        # Neither a new SUBSCRIBE nor PUBACK/PUBREC may be sent, even for
+        # PUBLISH buffered with CONNACK or arriving after the replay timeout.
+        assert {data[0] >> 4 for data in retry.sent} == {PacketType.CONNECT, PacketType.PINGREQ}
+        assert subscription._queue.empty()

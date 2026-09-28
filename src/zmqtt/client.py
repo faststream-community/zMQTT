@@ -25,6 +25,7 @@ from zmqtt._internal.packets.subscribe import SubscriptionRequest, UnsubAck
 from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.request_response import _RequestDispatcher
 from zmqtt._internal.state import SessionState
+from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.topic_matching import _DEFAULT_STRIPPED_PREFIXES
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
@@ -402,7 +403,6 @@ class Subscription:
         self._client._subscriptions.remove(self)
         protocol = self._client._protocol
         if cancelled or not self._registered_filters or protocol is None:
-            self._detach_local(protocol)
             return None
         try:
             sent = await protocol.unsubscribe(self._registered_filters)
@@ -414,7 +414,7 @@ class Subscription:
     def _detach_local(self, protocol: MQTTProtocol | None) -> None:
         self._detached = True
         if protocol is not None:
-            protocol.detach(self._registered_filters)
+            self._client._detached_filters.update(protocol.detach(self._registered_filters))
         while not self._queue.empty():
             self._queue.get_nowait()
 
@@ -439,6 +439,8 @@ class Subscription:
 
     async def _reconnect(self, protocol: MQTTProtocol) -> None:
         """Re-subscribe on a fresh protocol after reconnection."""
+        if self._detached:
+            return
         await self._do_subscribe(protocol)
 
     async def start(self) -> None:
@@ -485,6 +487,9 @@ class Subscription:
         unprocessed messages matters. Messages already handed to a consumer can
         still be acknowledged until the client disconnects. Cancel any task
         already waiting in ``get_message()`` as part of shutdown.
+        Automatic reconnection preserves detachment until an explicit
+        ``client.disconnect()``. A new subscription to the same filter before
+        that disconnect is ignored with a warning.
         """
         if self not in self._client._subscriptions:
             return
@@ -700,6 +705,7 @@ class MQTTClient:
         self._connection_id = 0
         self._protocol: MQTTProtocol | None = None
         self._subscriptions: list[Subscription] = []
+        self._detached_filters: dict[str, SubscriptionEntry] = {}
         self._run_task: asyncio.Task[None] | None = None
         self._subscription_failure: asyncio.Future[BaseException] | None = None
 
@@ -750,6 +756,7 @@ class MQTTClient:
             if self._protocol is not None:
                 await self._protocol.disconnect()
                 self._protocol = None
+            self._detached_filters.clear()
 
     async def connect(self) -> None:
         """Connect to the broker and start the background run loop.
@@ -1056,6 +1063,9 @@ class MQTTClient:
             connection_id=self._connection_id + 1,
         )
         self._protocol = protocol
+        # Install before starting the read loop: a resumed session can deliver
+        # PUBLISH immediately, including in the same read as CONNACK.
+        protocol.restore_detached(self._detached_filters)
         self._connection_info = info
         self._connection_id = info.connection_id
         self._request_dispatcher.bind(protocol)

@@ -34,8 +34,12 @@ subscription queue. With `auto_ack=False`, those messages and any newly received
 after detachment remain unacknowledged; messages already handed to a handler can
 still be acknowledged before disconnect. With `auto_ack=True`, a queued message
 may already have been acknowledged, so use manual acknowledgement when replay of
-unprocessed messages is required. A detached `Subscription` is terminal; create
-a new one after reconnecting. Cancel tasks already waiting in `get_message()`
+unprocessed messages is required. Automatic reconnection preserves detachment
+until an explicit `client.disconnect()`, including leaving new messages
+unacknowledged. A detached `Subscription` is terminal; explicitly disconnect
+and connect the client before creating a new subscription. Subscribing to a
+detached filter before that disconnect logs a warning and does not restore
+delivery. Cancel tasks already waiting in `get_message()`
 during shutdown. To remove the broker filter, use `stop()` instead.
 
 On MQTT 5.0 the broker may reject some filters (reason code `0x80` or above); they are listed in `failures`. The subscription stops anyway, but the broker may keep sending messages on a rejected filter — on a persistent session, across reconnects too.
