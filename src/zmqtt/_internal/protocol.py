@@ -33,13 +33,7 @@ from zmqtt._internal.state import (
     SessionState,
 )
 from zmqtt._internal.subscription_index import SubscriptionEntry
-from zmqtt._internal.topic_aliases import (
-    OutgoingAliasLimitError,
-    TopicAliasError,
-    TopicAliasTable,
-    resolve_incoming,
-    validate_alias_range,
-)
+from zmqtt._internal.topic_aliases import TopicAliasTable
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
@@ -198,8 +192,6 @@ class MQTTProtocol:
         if incoming_topic_alias_maximum < 0 or incoming_topic_alias_maximum > 65535:
             msg = "incoming_topic_alias_maximum must be in 0..65535"
             raise ValueError(msg)
-        # Advertised in CONNECT: how many aliases the *server* may use towards
-        # us. 0 (default) keeps incoming aliases disabled.
         self._incoming_alias_maximum: Final = incoming_topic_alias_maximum
         self._state = state
         self._keepalive = keepalive
@@ -224,10 +216,9 @@ class MQTTProtocol:
         # and 3.1.1 has no CONNACK properties at all — default to EXACTLY_ONCE
         # so publish() never has to branch on None.
         self._max_publish_qos: QoS = QoS.EXACTLY_ONCE
-        # Topic Alias state (§3.3.2.3.4), per network connection. Both tables
-        # are (re)initialized on every CONNACK — see _await_connack.
         self._outgoing_aliases = TopicAliasTable(limit=0)
         self._incoming_aliases = TopicAliasTable(limit=0)
+        self._outgoing_alias_lock = asyncio.Lock()
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
@@ -265,9 +256,6 @@ class MQTTProtocol:
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
                     else:  # 3.1.1 has no CONNACK properties: no limit.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
-                    # Fresh network connection: clear all Topic Alias state, resumed
-                    # sessions included (§3.3.2.3.4 — aliases are connection-scoped),
-                    # then adopt the server's Topic Alias Maximum as our outgoing cap.
                     server_alias_max = 0
                     if self._version == "5.0" and pkt.properties is not None:
                         server_alias_max = pkt.properties.topic_alias_maximum or 0
@@ -344,36 +332,35 @@ class MQTTProtocol:
             msg = "Connection lost"
             raise MQTTDisconnectedError(msg)
 
-    def _apply_outgoing_topic_alias(self, packet: Publish) -> Publish:
-        """Enforce §3.3.2.3.4 on one outgoing PUBLISH.
-
-        v5 with properties.topic_alias set:
-        - non-empty topic: validate + (re)bind the alias, send as-is;
-        - empty topic: must reference an alias registered earlier on this
-          connection; the packet keeps the empty Topic Name so the wire
-          form carries only the alias (§3.3.2.3.4 payload saving).
-        """
+    def _validate_outgoing_topic_alias(self, packet: Publish) -> int | None:
         if self._version != "5.0":
-            return packet
+            return None
         alias = packet.properties.topic_alias if packet.properties is not None else None
         if alias is None:
-            return packet
-        try:
-            # Range first so alias=0/65536 report the actual problem, not
-            # a confusing "unregistered alias".
-            validate_alias_range(alias)
-            if packet.topic:
-                self._outgoing_aliases.set(alias, packet.topic)
-                return packet
-            resolved = self._outgoing_aliases.get(alias)
-            if resolved is not None:
-                return packet
+            return None
+        self._outgoing_aliases.validate(alias)
+        if not packet.topic and self._outgoing_aliases.get(alias) is None:
             msg = f"Empty Topic Name for unregistered Topic Alias {alias}"
-        except OutgoingAliasLimitError as exc:
-            raise MQTTTopicAliasError(str(exc)) from exc
-        except TopicAliasError as exc:
-            raise MQTTTopicAliasError(str(exc)) from exc
-        raise MQTTTopicAliasError(msg)
+            raise MQTTTopicAliasError(msg)
+        return alias
+
+    async def _send_publish(self, packet: Publish) -> None:
+        if self._version != "5.0" or packet.properties is None or packet.properties.topic_alias is None:
+            await self._send(self._encode(packet))
+            return
+        async with self._outgoing_alias_lock:
+            self._ensure_alive()
+            alias = self._validate_outgoing_topic_alias(packet)
+            data = self._encode(packet)
+            try:
+                await self._send(data)
+            except BaseException:
+                self._dead = True
+                with contextlib.suppress(Exception):
+                    await self.abort()
+                raise
+            if packet.topic and alias is not None:
+                self._outgoing_aliases.set(alias, packet.topic)
 
     async def publish(self, packet: Publish) -> PubAck | PubComp | None:
         """
@@ -383,10 +370,10 @@ class MQTTProtocol:
         max_qos = self._max_publish_qos
         if packet.qos > max_qos:
             raise MQTTQoSExceededError(requested=int(packet.qos), maximum=int(max_qos))
-        packet = self._apply_outgoing_topic_alias(packet)
+        alias = self._validate_outgoing_topic_alias(packet)
         match packet.qos:
             case QoS.AT_MOST_ONCE:
-                await self._send(self._encode(packet))
+                await self._send_publish(packet)
                 log.debug("Published QoS 0 to topic %r", packet.topic)
                 return None
 
@@ -400,7 +387,16 @@ class MQTTProtocol:
                     publish=packet,
                     future=future,
                 )
-                await self._send(self._encode(packet))
+                try:
+                    await self._send_publish(packet)
+                except BaseException:
+                    if alias is not None:
+                        self._state.inflight_qos1.pop(pid, None)
+                        self._state.packet_ids.release(pid)
+                        future.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            future.exception()
+                    raise
                 log.debug("Published QoS 1 to topic %r with packet_id=%d", packet.topic, pid)
                 ack = await future
                 _raise_on_rejected_puback(ack)
@@ -417,7 +413,16 @@ class MQTTProtocol:
                     state=OutboundQoS2State.PENDING_PUBREC,
                     future=future2,
                 )
-                await self._send(self._encode(packet))
+                try:
+                    await self._send_publish(packet)
+                except BaseException:
+                    if alias is not None:
+                        self._state.inflight_qos2_out.pop(pid, None)
+                        self._state.packet_ids.release(pid)
+                        future2.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            future2.exception()
+                    raise
                 log.debug("Published QoS 2 to topic %r with packet_id=%d", packet.topic, pid)
                 return await future2
 
@@ -706,25 +711,27 @@ class MQTTProtocol:
         await self.inbound.handle_publish(await self._resolve_incoming_topic_alias(packet))
 
     async def _resolve_incoming_topic_alias(self, packet: Publish) -> Publish:
-        """Resolve §3.3.2.3.4 aliases on one inbound PUBLISH; maybe rewrite it.
-
-        Violations tear the connection down with DISCONNECT 0x82 (Protocol
-        Error) after §3.14.2.2.1 — the sender misused the alias mechanism.
-        """
         if self._version != "5.0":
             return packet
         alias = packet.properties.topic_alias if packet.properties is not None else None
         if alias is None:
+            if not packet.topic:
+                await self.abort(0x82)
+                msg = "Empty Topic Name without a Topic Alias"
+                raise MQTTProtocolError(msg)
             return packet
-        try:
-            resolved = resolve_incoming(packet.topic, alias, self._incoming_aliases)
-        except TopicAliasError as exc:
-            # §3.14.2.2.1: DISCONNECT 0x82 Protocol Error, then close.
-            with contextlib.suppress(Exception):
-                await self._send(self._encode(Disconnect(reason_code=0x82)))
-            raise MQTTProtocolError(str(exc)) from exc
-        if resolved == packet.topic:
+        if not 1 <= alias <= self._incoming_aliases.limit:
+            await self.abort(0x94)
+            msg = f"Peer sent invalid Topic Alias {alias} (advertised maximum {self._incoming_aliases.limit})"
+            raise MQTTProtocolError(msg)
+        if packet.topic:
+            self._incoming_aliases.set(alias, packet.topic)
             return packet
+        resolved = self._incoming_aliases.get(alias)
+        if resolved is None:
+            await self.abort(0x82)
+            msg = f"Alias-only PUBLISH for unknown Topic Alias {alias}"
+            raise MQTTProtocolError(msg)
         return dataclasses.replace(packet, topic=resolved)
 
     async def _handle_pubrel(self, packet: PubRel) -> None:

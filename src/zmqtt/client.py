@@ -813,15 +813,21 @@ class MQTTClient:
         """Publish a message to *topic*.
 
         Args:
-            topic: Topic string. Must not contain wildcards.
+            topic: Topic string. Must not contain wildcards. On MQTT 5.0, an
+                empty string reuses ``properties.topic_alias`` registered by a
+                previous publish on this network connection. Register again
+                with a full topic after reconnecting.
             payload: Message body. ``str`` values are UTF-8 encoded automatically.
             qos: Delivery guarantee level. Defaults to ``AT_MOST_ONCE``.
             retain: Ask the broker to retain the message for future subscribers.
             properties: MQTT 5.0 publish properties. Raises if used with MQTT 3.1.1.
 
         Raises:
-            MQTTInvalidTopicError: If *topic* is empty, contains wildcards, or has
-                ``$`` in a non-leading position.
+            MQTTInvalidTopicError: If *topic* is empty without an alias, contains
+                wildcards, or has ``$`` in a non-leading position.
+            MQTTTopicAliasError: If the alias is out of range, exceeds the
+                broker's Topic Alias Maximum, or an empty topic uses an alias
+                not yet registered on this connection.
             MQTTDisconnectedError: If the client is not currently connected.
             RuntimeError: If *properties* is supplied on an MQTT 3.1.1 connection.
             MQTTPublishError: If the broker rejects a QoS 1/2 publish. Not raised for QoS 0 or MQTT 3.1.1.
