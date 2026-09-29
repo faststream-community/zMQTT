@@ -188,6 +188,7 @@ class MQTTProtocol:
         self._transport = transport
         self._state = state
         self._keepalive = keepalive
+        self._effective_keepalive = keepalive
         self._ping_timeout = ping_timeout
         self._connect_timeout = connect_timeout
         self._version: Final = version
@@ -240,7 +241,10 @@ class MQTTProtocol:
                     if pkt.return_code != 0:
                         raise MQTTConnectError(pkt.return_code, properties=pkt.properties)
                     log.info("Connected with session_present=%s", pkt.session_present)
+                    self._effective_keepalive = self._keepalive
                     if self._version == "5.0" and pkt.properties is not None:
+                        if pkt.properties.server_keep_alive is not None:
+                            self._effective_keepalive = pkt.properties.server_keep_alive
                         # Properties present but Maximum QoS absent: spec default is QoS 2.
                         max_qos = pkt.properties.maximum_qos
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
@@ -600,8 +604,10 @@ class MQTTProtocol:
                 self._buf.feed(data)
 
     async def _ping_loop(self) -> None:
+        if self._effective_keepalive == 0:
+            return
         while True:
-            await asyncio.sleep(self._keepalive)
+            await asyncio.sleep(self._effective_keepalive)
             await self.ping(timeout=self._ping_timeout)
 
     async def _dispatch(self, packet: AnyPacket) -> None:  # noqa: C901
