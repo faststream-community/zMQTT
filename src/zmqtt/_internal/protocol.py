@@ -9,13 +9,14 @@ from typing import Final, Literal
 
 from zmqtt._internal import topic_matching
 from zmqtt._internal._compat import wait_for
+from zmqtt._internal.auth import AuthHandler
 from zmqtt._internal.inbound import InboundPublishFlow
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.codec import AnyPacket, PacketTooLargeError, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.ping import PingReq, PingResp
-from zmqtt._internal.packets.properties import SubscribeProperties
+from zmqtt._internal.packets.properties import AuthProperties, ConnAckProperties, SubscribeProperties
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import (
@@ -37,6 +38,7 @@ from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
 from zmqtt.errors import (
+    MQTTAuthError,
     MQTTConnectError,
     MQTTDisconnectedError,
     MQTTProtocolError,
@@ -184,6 +186,7 @@ class MQTTProtocol:
         # Inbound limits to enforce; must match those advertised in CONNECT.
         receive_maximum: int | None = None,
         maximum_packet_size: int | None = None,
+        auth_handler: AuthHandler | None = None,
     ) -> None:
         self._transport = transport
         self._state = state
@@ -205,6 +208,7 @@ class MQTTProtocol:
         self._subscription_guards = _SubscriptionGuards()
         self._disconnecting = False
         self._dead = False
+        self._auth_handler: AuthHandler | None = auth_handler
         # MQTT 5 §3.2.2.3.4: absent Maximum QoS means the server accepts QoS 2,
         # and 3.1.1 has no CONNACK properties at all — default to EXACTLY_ONCE
         # so publish() never has to branch on None.
@@ -234,11 +238,31 @@ class MQTTProtocol:
                 data = await self._transport.read(4096)
                 self._buf.feed(data)
                 for pkt in self._buf:
+                    if isinstance(pkt, Auth):
+                        if pkt.reason_code != 0x18 or self._auth_handler is None:
+                            msg = f"Unexpected AUTH packet during CONNECT: {pkt!r}"
+                            raise MQTTProtocolError(msg)
+                        self._require_auth_method(pkt.properties)
+                        challenge_data = self._auth_data(pkt.properties)
+                        response_data = await self._auth_handler.continue_data(challenge_data)
+                        response = Auth(
+                            reason_code=0x18,
+                            properties=AuthProperties(
+                                authentication_method=self._auth_handler.method,
+                                authentication_data=response_data,
+                            ),
+                        )
+                        await self._send(self._encode(response))
+                        continue
+
                     if not isinstance(pkt, ConnAck):
                         msg = f"Expected CONNACK, got {pkt!r}"
                         raise MQTTProtocolError(msg)
                     if pkt.return_code != 0:
                         raise MQTTConnectError(pkt.return_code, properties=pkt.properties)
+                    if self._auth_handler is not None:
+                        self._require_auth_method(pkt.properties)
+                        await self._auth_handler.finalize_data(self._auth_data(pkt.properties))
                     log.info("Connected with session_present=%s", pkt.session_present)
                     if self._version == "5.0" and pkt.properties is not None:
                         # Properties present but Maximum QoS absent: spec default is QoS 2.
@@ -246,6 +270,9 @@ class MQTTProtocol:
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
                     else:  # 3.1.1 has no CONNACK properties: no limit.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
+                    if self._auth_handler is not None:
+                        # Re-authentication reuses the method negotiated in this CONNECT.
+                        self._state.auth_method = self._auth_handler.method
                     self.inbound.begin_session(session_present=pkt.session_present)
                     return pkt
 
@@ -303,6 +330,8 @@ class MQTTProtocol:
             if not ping_f.done():
                 ping_f.set_exception(exc)
         self._ping_waiters.clear()
+        if self._state.pending_auth is not None and not self._state.pending_auth.done():
+            self._state.pending_auth.set_exception(exc)
         self.inbound.clear()
 
     def _ensure_alive(self) -> None:
@@ -586,6 +615,66 @@ class MQTTProtocol:
         await self._send(self._encode(packet))
         log.debug("Sent AUTH with reason_code=%d", packet.reason_code)
 
+    async def reauthenticate(self, data: bytes | None = None, *, timeout: float | None = None) -> None:
+        """Client-initiated re-authentication (MQTT 5.0, reason code 0x19).
+
+        Reuses the authentication method negotiated during CONNECT. Raises if
+        the connection never completed an enhanced-auth exchange at CONNECT
+        time, since MQTT 5.0 §4.12 requires re-auth to use same method.
+
+        If the call is cancelled or times out, the connection is closed: the
+        broker cannot be told the exchange was abandoned.
+        """
+        if self._version != "5.0":
+            msg = f"Feature is not supported for mqtt protocol version {self._version}"
+            raise RuntimeError(msg)
+        self._ensure_alive()
+        if self._auth_handler is None or self._state.auth_method is None:
+            msg = "reauthenticate() requires a negotiated authentication method from CONNECT"
+            raise RuntimeError(msg)
+        if self._state.pending_auth is not None and not self._state.pending_auth.done():
+            msg = "A re-authentication exchange is already in progress"
+            raise RuntimeError(msg)
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Auth] = loop.create_future()
+
+        async def exchange() -> None:
+            await self.send_packet(
+                Auth(
+                    reason_code=0x19,
+                    properties=AuthProperties(
+                        authentication_method=self._state.auth_method,
+                        authentication_data=data,
+                    ),
+                ),
+            )
+            log.debug("Sent AUTH with reason_code=0x19 (re-authenticate)")
+            await future
+
+        self._state.pending_auth = future
+        try:
+            await wait_for(exchange(), timeout=timeout)
+        except asyncio.TimeoutError as e:
+            await self._abort_abandoned_reauth()
+            msg = "Re-authentication was not completed within timeout"
+            raise MQTTTimeoutError(msg) from e
+        except asyncio.CancelledError:
+            await self._abort_abandoned_reauth()
+            raise
+        finally:
+            self._state.pending_auth = None
+
+    async def _abort_abandoned_reauth(self) -> None:
+        """Drop the connection after a local cancel/timeout of a re-authentication.
+
+        The broker does not know the exchange was abandoned, so a late reply
+        could complete the next exchange (and a half-written AUTH may be on the
+        wire). No DISCONNECT is sent: it would queue behind the same stalled write.
+        """
+        self._dead = True
+        await asyncio.shield(self.abort())
+
     async def _read_loop(self) -> None:
         async with self._rejecting_oversized_packets():
             while True:
@@ -607,6 +696,8 @@ class MQTTProtocol:
     async def _dispatch(self, packet: AnyPacket) -> None:  # noqa: C901
         log.debug("Received %r", packet)
         match packet:
+            case Auth():
+                await self._handle_auth(packet)
             case Publish():
                 await self._handle_publish(packet)
             case PubAck():
@@ -623,19 +714,20 @@ class MQTTProtocol:
                 await self._handle_unsuback(packet)
             case PingResp():
                 self._handle_pingresp()
-            case Disconnect(reason_code=reason_code):
+            case Disconnect(reason_code=reason_code, properties=props):
                 # A broker-initiated DISCONNECT (session takeover, keepalive timeout,
-                # admin kick) is a disconnection, not a protocol violation — raise it
-                # as MQTTDisconnectedError so it takes the reconnect path.
+                # admin kick, or a failed re-authentication) is a disconnection, not
+                # a protocol violation — raise it as MQTTDisconnectedError so it
+                # takes the reconnect path. A DISCONNECT while a re-auth exchange is
+                # in flight additionally fails that exchange with a typed error.
+                pending_auth = self._state.pending_auth
+                if pending_auth is not None and not pending_auth.done():
+                    reason_string = props.reason_string if props is not None else None
+                    pending_auth.set_exception(
+                        MQTTAuthError(reason_code, reason_name=None, reason_string=reason_string),
+                    )
                 msg = f"Broker sent DISCONNECT (reason code 0x{reason_code:02X})"
                 raise MQTTDisconnectedError(msg)
-            case Auth():
-                if self._version != "5.0":
-                    msg = "Received AUTH packet in MQTT 3.1.1 session"
-                    raise MQTTProtocolError(
-                        msg,
-                    )
-                # AUTH exchange is handled by the caller via auth(); ignore here.
             case _:
                 msg = f"Unexpected packet from broker: {packet!r}"
                 raise MQTTProtocolError(msg)
@@ -710,6 +802,59 @@ class MQTTProtocol:
                 msg,
             )
         future.set_result(packet)
+
+    def _require_auth_method(self, properties: AuthProperties | ConnAckProperties | None) -> None:
+        """Reject a packet whose Authentication Method differs from the one sent in CONNECT (MQTT 5.0 §4.12)."""
+        expected = self._auth_handler.method if self._auth_handler is not None else None
+        received = properties.authentication_method if properties is not None else None
+        if received != expected:
+            msg = f"Authentication Method mismatch: expected {expected!r}, got {received!r}"
+            raise MQTTProtocolError(msg)
+
+    @staticmethod
+    def _auth_data(properties: AuthProperties | ConnAckProperties | None) -> bytes | None:
+        return properties.authentication_data if properties is not None else None
+
+    async def _handle_auth(self, packet: Auth) -> None:
+        if self._version != "5.0":
+            msg = "Received AUTH packet in MQTT 3.1.1 session"
+            raise MQTTProtocolError(msg)
+
+        pending_auth = self._state.pending_auth
+        if pending_auth is None or pending_auth.done() or self._auth_handler is None:
+            # Only response to a client-initiated reauthenticate() is valid here —
+            # the broker never sends AUTH unsolicited (MQTT 5.0 §4.12).
+            msg = f"Unexpected AUTH packet: {packet!r}"
+            raise MQTTProtocolError(msg)
+
+        self._require_auth_method(packet.properties)
+        auth_data = self._auth_data(packet.properties)
+
+        if packet.reason_code == 0x18:
+            response_data = await self._auth_handler.continue_data(auth_data)
+            response = Auth(
+                reason_code=0x18,
+                properties=AuthProperties(
+                    authentication_method=self._auth_handler.method,
+                    authentication_data=response_data,
+                ),
+            )
+            await self.send_packet(response)
+            return
+
+        if packet.reason_code == 0x00:
+            try:
+                await self._auth_handler.finalize_data(auth_data)
+            except Exception as e:
+                # Surface the handler's error to reauthenticate(); the read loop
+                # then dies and the connection is dropped.
+                pending_auth.set_exception(e)
+                raise
+            pending_auth.set_result(packet)
+            return
+
+        msg = f"Unexpected AUTH reason_code 0x{packet.reason_code:02X}"
+        raise MQTTProtocolError(msg)
 
     def _handle_pingresp(self) -> None:
         if self._ping_waiters:

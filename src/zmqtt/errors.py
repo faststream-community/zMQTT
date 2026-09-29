@@ -79,3 +79,15 @@ class MQTTPublishError(MQTTError):
 
 class MQTTInvalidTopicError(MQTTError):
     """Topic string or topic filter failed MQTT validation."""
+
+
+class MQTTAuthError(MQTTError):
+    """Authentication failed."""
+
+    def __init__(self, reason_code: int, reason_name: str | None, reason_string: str | None = None) -> None:
+        self.reason_code = reason_code
+        self.reason_name = reason_name
+        self.reason_string = reason_string
+        named = f"0x{reason_code:02X} {reason_name}" if reason_name else f"0x{reason_code:02X}"
+        detail = f": {reason_string}" if reason_string else ""
+        super().__init__(f"Authentication failed ({named}){detail}")

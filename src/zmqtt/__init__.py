@@ -1,3 +1,4 @@
+from zmqtt._internal.auth import AuthHandler
 from zmqtt._internal.packets.connect import Will
 from zmqtt._internal.packets.properties import (
     AuthProperties,
@@ -22,6 +23,7 @@ from zmqtt.client import (
     create_client,
 )
 from zmqtt.errors import (
+    MQTTAuthError,
     MQTTConnectError,
     MQTTDisconnectedError,
     MQTTError,
@@ -34,10 +36,12 @@ from zmqtt.errors import (
 )
 
 __all__ = (
+    "AuthHandler",
     "AuthProperties",
     "ConnAckProperties",
     "ConnectProperties",
     "ConnectionInfo",
+    "MQTTAuthError",
     "MQTTClient",
     "MQTTClientV5",
     "MQTTClientV311",
