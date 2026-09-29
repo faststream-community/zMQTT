@@ -16,7 +16,8 @@ from zmqtt import MQTTClient
 from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
-from zmqtt._internal.packets.properties import PublishProperties
+from zmqtt._internal.packets.ping import PingReq
+from zmqtt._internal.packets.properties import ConnAckProperties, PublishProperties
 from zmqtt._internal.packets.publish import PubAck, Publish, PubRec, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import SubAck, Subscribe, SubscriptionRequest, UnsubAck
@@ -47,6 +48,7 @@ class FakeTransport:
 
     def __init__(self) -> None:
         self.sent: list[bytes] = []
+        self.written = asyncio.Event()
         self._rx: deque[bytes | Exception] = deque()
         self._closed = False
 
@@ -63,6 +65,7 @@ class FakeTransport:
 
     async def write(self, data: bytes) -> None:
         self.sent.append(data)
+        self.written.set()
 
     async def close(self) -> None:
         self._closed = True
@@ -170,10 +173,85 @@ async def test_connect_succeeds_within_timeout() -> None:
 
 
 async def test_ping_timeout_raises() -> None:
-    protocol, _ = make_protocol(keepalive=0, ping_timeout=0.05)
+    protocol, _ = make_protocol(keepalive=1, ping_timeout=0.05)
     ping_task = asyncio.create_task(protocol._ping_loop())
     with pytest.raises(MQTTTimeoutError):
         await ping_task
+
+
+@pytest.mark.parametrize(
+    ("client_keepalive", "server_keepalive"),
+    [(60, 1), (1, None), (0, 1)],
+)
+async def test_ping_interval_uses_effective_keepalive(client_keepalive: int, server_keepalive: int | None) -> None:
+    protocol, transport = make_protocol(keepalive=client_keepalive, version="5.0")
+    properties = ConnAckProperties(server_keep_alive=server_keepalive) if server_keepalive is not None else None
+    transport.feed(encode(ConnAck(session_present=False, return_code=0, properties=properties), version="5.0"))
+    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=client_keepalive))
+    transport.sent.clear()
+    transport.written.clear()
+
+    ping_task = asyncio.create_task(protocol._ping_loop())
+    try:
+        await asyncio.wait_for(transport.written.wait(), timeout=3.0)
+        assert transport.sent == [encode(PingReq(), version="5.0")]
+    finally:
+        await _stop_task(ping_task)
+
+
+@pytest.mark.parametrize(
+    ("client_keepalive", "server_keepalive", "version"),
+    [(0, None, "3.1.1"), (0, None, "5.0"), (60, 0, "5.0")],
+)
+async def test_zero_effective_keepalive_disables_auto_ping(
+    client_keepalive: int,
+    server_keepalive: int | None,
+    version: Literal["3.1.1", "5.0"],
+) -> None:
+    protocol, transport = make_protocol(keepalive=client_keepalive, version=version)
+    properties = ConnAckProperties(server_keep_alive=server_keepalive) if server_keepalive is not None else None
+    transport.feed(encode(ConnAck(session_present=False, return_code=0, properties=properties), version=version))
+    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=client_keepalive))
+    transport.sent.clear()
+    transport.written.clear()
+
+    ping_task = asyncio.create_task(protocol._ping_loop())
+    try:
+        await asyncio.sleep(0.05)
+        assert transport.sent == []
+        assert ping_task.done()
+
+        manual_ping = asyncio.create_task(protocol.ping())
+        await asyncio.wait_for(transport.written.wait(), timeout=1.0)
+        assert transport.sent == [encode(PingReq(), version=version)]
+        protocol._handle_pingresp()
+        await manual_ping
+    finally:
+        await _stop_task(ping_task)
+
+
+async def test_next_connack_recomputes_effective_keepalive() -> None:
+    protocol, transport = make_protocol(keepalive=1, version="5.0")
+    transport.feed(
+        encode(
+            ConnAck(session_present=False, return_code=0, properties=ConnAckProperties(server_keep_alive=0)),
+            version="5.0",
+        ),
+    )
+    connect = Connect(client_id="c", clean_session=True, keepalive=1)
+    await protocol.connect(connect)
+
+    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="5.0"))
+    await protocol.connect(connect)
+    transport.sent.clear()
+    transport.written.clear()
+
+    ping_task = asyncio.create_task(protocol._ping_loop())
+    try:
+        await asyncio.wait_for(transport.written.wait(), timeout=3.0)
+        assert transport.sent == [encode(PingReq(), version="5.0")]
+    finally:
+        await _stop_task(ping_task)
 
 
 async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
