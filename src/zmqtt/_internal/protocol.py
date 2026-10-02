@@ -44,6 +44,7 @@ from zmqtt.errors import (
     MQTTQoSExceededError,
     MQTTSubscribeError,
     MQTTTimeoutError,
+    MQTTTopicAliasError,
 )
 
 log = logging.getLogger("zmqtt.protocol")
@@ -184,8 +185,10 @@ class MQTTProtocol:
         # Inbound limits to enforce; must match those advertised in CONNECT.
         receive_maximum: int | None = None,
         maximum_packet_size: int | None = None,
+        incoming_topic_alias_maximum: int = 0,
     ) -> None:
         self._transport = transport
+        self._incoming_alias_maximum: Final = incoming_topic_alias_maximum
         self._state = state
         self._keepalive = keepalive
         self._ping_timeout = ping_timeout
@@ -209,6 +212,10 @@ class MQTTProtocol:
         # and 3.1.1 has no CONNACK properties at all — default to EXACTLY_ONCE
         # so publish() never has to branch on None.
         self._max_publish_qos: QoS = QoS.EXACTLY_ONCE
+        self._outgoing_alias_maximum = 0
+        self._outgoing_aliases: set[int] = set()
+        self._incoming_aliases: dict[int, str] = {}
+        self._outgoing_alias_lock = asyncio.Lock()
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
@@ -244,6 +251,7 @@ class MQTTProtocol:
                         # Properties present but Maximum QoS absent: spec default is QoS 2.
                         max_qos = pkt.properties.maximum_qos
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
+                        self._outgoing_alias_maximum = pkt.properties.topic_alias_maximum or 0
                     else:  # 3.1.1 has no CONNACK properties: no limit.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
                     self.inbound.begin_session(session_present=pkt.session_present)
@@ -317,6 +325,26 @@ class MQTTProtocol:
             msg = "Connection lost"
             raise MQTTDisconnectedError(msg)
 
+    async def _send_alias_publish(self, packet: Publish, alias: int) -> None:
+        async with self._outgoing_alias_lock:
+            self._ensure_alive()
+            if not 1 <= alias <= self._outgoing_alias_maximum:
+                msg = f"Topic Alias {alias} must be in 1..{self._outgoing_alias_maximum} (broker's Topic Alias Maximum)"
+                raise MQTTTopicAliasError(msg)
+            if not packet.topic and alias not in self._outgoing_aliases:
+                msg = f"Empty Topic Name for unregistered Topic Alias {alias}"
+                raise MQTTTopicAliasError(msg)
+            data = self._encode(packet)
+            try:
+                await self._send(data)
+            except BaseException:
+                self._dead = True
+                with contextlib.suppress(Exception):
+                    await self.abort()
+                raise
+            if packet.topic:
+                self._outgoing_aliases.add(alias)
+
     async def publish(self, packet: Publish) -> PubAck | PubComp | None:
         """
         Publish a message. Returns PubAck (QoS 1), PubComp (QoS 2), or None (QoS 0).
@@ -325,42 +353,52 @@ class MQTTProtocol:
         max_qos = self._max_publish_qos
         if packet.qos > max_qos:
             raise MQTTQoSExceededError(requested=int(packet.qos), maximum=int(max_qos))
-        match packet.qos:
-            case QoS.AT_MOST_ONCE:
-                await self._send(self._encode(packet))
-                log.debug("Published QoS 0 to topic %r", packet.topic)
-                return None
-
-            case QoS.AT_LEAST_ONCE:
-                loop = asyncio.get_running_loop()
-                pid = self._state.packet_ids.acquire()
-                packet = dataclasses.replace(packet, packet_id=pid)
-                future: asyncio.Future[PubAck] = loop.create_future()
-                self._state.inflight_qos1[pid] = QoS1Flight(
-                    packet_id=pid,
-                    publish=packet,
-                    future=future,
-                )
-                await self._send(self._encode(packet))
-                log.debug("Published QoS 1 to topic %r with packet_id=%d", packet.topic, pid)
-                ack = await future
-                _raise_on_rejected_puback(ack)
-                return ack
-
-            case QoS.EXACTLY_ONCE:
-                loop = asyncio.get_running_loop()
-                pid = self._state.packet_ids.acquire()
-                packet = dataclasses.replace(packet, packet_id=pid)
+        future: asyncio.Future[PubAck] | None = None
+        flight: QoS1Flight | OutboundQoS2Flight | None = None
+        if packet.qos != QoS.AT_MOST_ONCE:
+            loop = asyncio.get_running_loop()
+            pid = self._state.packet_ids.acquire()
+            packet = dataclasses.replace(packet, packet_id=pid)
+            if packet.qos == QoS.AT_LEAST_ONCE:
+                future = loop.create_future()
+                flight = QoS1Flight(packet_id=pid, publish=packet, future=future)
+                self._state.inflight_qos1[pid] = flight
+            else:
                 future2: asyncio.Future[PubComp] = loop.create_future()
-                self._state.inflight_qos2_out[pid] = OutboundQoS2Flight(
+                flight = OutboundQoS2Flight(
                     packet_id=pid,
                     publish=packet,
                     state=OutboundQoS2State.PENDING_PUBREC,
                     future=future2,
                 )
+                self._state.inflight_qos2_out[pid] = flight
+
+        try:
+            alias = packet.properties.topic_alias if packet.properties is not None else None
+            if alias is None:
                 await self._send(self._encode(packet))
-                log.debug("Published QoS 2 to topic %r with packet_id=%d", packet.topic, pid)
-                return await future2
+            else:
+                await self._send_alias_publish(packet, alias)
+        except BaseException:
+            if flight is not None:
+                if packet.qos == QoS.AT_LEAST_ONCE:
+                    self._state.inflight_qos1.pop(flight.packet_id, None)
+                else:
+                    self._state.inflight_qos2_out.pop(flight.packet_id, None)
+                self._state.packet_ids.release(flight.packet_id)
+                flight.future.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    flight.future.exception()
+            raise
+
+        log.debug("Published QoS %d to topic %r with packet_id=%s", packet.qos, packet.topic, packet.packet_id)
+        if flight is None:
+            return None
+        if future is not None:
+            ack = await future
+            _raise_on_rejected_puback(ack)
+            return ack
+        return await flight.future
 
     async def subscribe(
         self,
@@ -644,6 +682,25 @@ class MQTTProtocol:
         return self.inbound.select_recipient(publish)
 
     async def _handle_publish(self, packet: Publish) -> None:
+        alias = packet.properties.topic_alias if packet.properties is not None else None
+        if alias is not None:
+            if not 1 <= alias <= self._incoming_alias_maximum:
+                await self.abort(0x94)
+                msg = f"Peer sent invalid Topic Alias {alias} (advertised maximum {self._incoming_alias_maximum})"
+                raise MQTTProtocolError(msg)
+            if packet.topic:
+                self._incoming_aliases[alias] = packet.topic
+            else:
+                topic = self._incoming_aliases.get(alias)
+                if topic is None:
+                    await self.abort(0x82)
+                    msg = f"Alias-only PUBLISH for unknown Topic Alias {alias}"
+                    raise MQTTProtocolError(msg)
+                packet = dataclasses.replace(packet, topic=topic)
+        elif not packet.topic:
+            await self.abort(0x82)
+            msg = "Empty Topic Name without a Topic Alias"
+            raise MQTTProtocolError(msg)
         await self.inbound.handle_publish(packet)
 
     async def _handle_pubrel(self, packet: PubRel) -> None:

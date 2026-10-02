@@ -20,6 +20,7 @@ from zmqtt import (
     MQTTClient,
     MQTTDisconnectedError,
     MQTTProtocolError,
+    MQTTTopicAliasError,
     PublishProperties,
     QoS,
     ReconnectConfig,
@@ -112,6 +113,89 @@ class BrokerTestBase(abc.ABC):
 
     async def test_publish_qos2(self, mqtt_client: MQTTClient, topic: str) -> None:
         await mqtt_client.publish(topic, b"hello", qos=QoS.EXACTLY_ONCE)
+
+    @pytest.fixture
+    def topic_alias(self, mqtt_client: MQTTClient) -> PublishProperties:
+        if self.version != "5.0":
+            pytest.skip("Topic aliases require MQTT 5.0")
+        properties = mqtt_client.connection_info.properties
+        if properties is None or not properties.topic_alias_maximum:
+            pytest.skip("Broker does not allow outgoing topic aliases")
+        return PublishProperties(topic_alias=properties.topic_alias_maximum)
+
+    @pytest.mark.parametrize("qos", list(QoS))
+    async def test_topic_alias_register_reuse_and_rebind(
+        self,
+        mqtt_client: MQTTClient,
+        topic_alias: PublishProperties,
+        topic: str,
+        qos: QoS,
+    ) -> None:
+        first, second = f"{topic}/first", f"{topic}/second"
+        async with mqtt_client.subscribe(f"{topic}/#", qos=qos) as sub:
+            for index, (wire_topic, expected) in enumerate(
+                [(first, first), ("", first), (second, second), ("", second)]
+            ):
+                payload = str(index).encode()
+                await asyncio.wait_for(mqtt_client.publish(wire_topic, payload, qos=qos, properties=topic_alias), 5)
+                message = await asyncio.wait_for(sub.get_message(), 5)
+                assert (message.topic, message.payload, message.qos) == (expected, payload, qos)
+
+    async def test_topic_alias_invalid_publish_keeps_connection_usable(
+        self, mqtt_client: MQTTClient, topic: str
+    ) -> None:
+        if self.version != "5.0":
+            pytest.skip("Topic aliases require MQTT 5.0")
+        async with mqtt_client.subscribe(topic) as sub:
+            for wire_topic, alias in [(topic, 0), (topic, 65536), ("", 1)]:
+                with pytest.raises(MQTTTopicAliasError):
+                    await mqtt_client.publish(wire_topic, b"invalid", properties=PublishProperties(topic_alias=alias))
+            await mqtt_client.publish(topic, b"valid")
+            message = await asyncio.wait_for(sub.get_message(), 5)
+            assert message.payload == b"valid"
+
+    async def test_failed_publish_does_not_register_topic_alias(
+        self,
+        mqtt_client: MQTTClient,
+        topic_alias: PublishProperties,
+        topic: str,
+    ) -> None:
+        async with mqtt_client.subscribe(topic) as sub:
+            with pytest.raises(UnicodeEncodeError):
+                await mqtt_client.publish(
+                    topic,
+                    b"invalid",
+                    qos=QoS.AT_LEAST_ONCE,
+                    properties=PublishProperties(
+                        topic_alias=topic_alias.topic_alias,
+                        content_type="\ud800",
+                    ),
+                )
+            with pytest.raises(MQTTTopicAliasError):
+                await mqtt_client.publish("", b"unregistered", properties=topic_alias)
+            for wire_topic, payload in [(topic, b"register"), ("", b"reuse")]:
+                await mqtt_client.publish(wire_topic, payload, properties=topic_alias)
+                message = await asyncio.wait_for(sub.get_message(), 5)
+                assert (message.topic, message.payload) == (topic, payload)
+
+    async def test_topic_alias_reset_on_resumed_session(self, topic: str) -> None:
+        if self.version != "5.0" or not self.supports_persistent_sessions:
+            pytest.skip("Requires MQTT 5.0 persistent sessions")
+        client = self.persistent_client(client_id=f"zmqtt-alias-{uuid.uuid4().hex}")
+        alias = PublishProperties(topic_alias=1)
+        async with client:
+            properties = client.connection_info.properties
+            if properties is None or not properties.topic_alias_maximum:
+                pytest.skip("Broker does not allow outgoing topic aliases")
+            await client.publish(topic, b"register", properties=alias)
+        async with client, client.subscribe(topic) as sub:
+            assert client.connection_info.session_present
+            with pytest.raises(MQTTTopicAliasError):
+                await client.publish("", b"stale", properties=alias)
+            await client.publish(topic, b"register-again", properties=alias)
+            assert (await asyncio.wait_for(sub.get_message(), 5)).payload == b"register-again"
+            await client.publish("", b"reuse", properties=alias)
+            assert (await asyncio.wait_for(sub.get_message(), 5)).payload == b"reuse"
 
     async def test_subscribe_receive_qos0(
         self,

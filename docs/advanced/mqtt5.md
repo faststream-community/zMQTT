@@ -148,6 +148,42 @@ async for msg in sub:
 | `content_type` | `str \| None` | MIME type of the payload |
 | `user_properties` | `tuple[tuple[str, str], ...]` | Arbitrary key-value pairs |
 
+## Topic aliases
+
+An outgoing Topic Alias replaces a repeated topic name with an integer. The
+broker must advertise a nonzero `topic_alias_maximum` in CONNACK. Register an
+alias by publishing its full topic, then reuse it with an empty topic:
+
+```python
+from zmqtt import PublishProperties, create_client
+
+async with create_client("localhost", version="5.0") as client:
+    props = client.connection_info.properties
+    if props is not None and (props.topic_alias_maximum or 0) >= 1:
+        alias = PublishProperties(topic_alias=1)
+        await client.publish("sensors/room/temperature", b"23.4", properties=alias)
+        await client.publish("", b"23.5", properties=alias)
+```
+
+Aliases must be in `1..65535` and within the broker's advertised maximum.
+Publishing a full topic with an existing alias changes its mapping. An invalid
+alias or an empty topic using an unregistered alias raises `MQTTTopicAliasError`
+before sending. A failed encoding does not register or change the alias. If an
+alias write fails or is cancelled while sending, the connection is closed
+because the broker may already have received the new mapping.
+
+Both directions keep separate mappings, cleared on every new network connection,
+including resumed sessions. Register outgoing aliases again after reconnecting.
+
+To accept aliases from the broker, pass `topic_alias_maximum=10` to
+`create_client(..., version="5.0")`. This advertises the incoming limit in
+CONNECT; it does not change the outgoing limit. The default is `0` (disabled),
+and accepted values are `0..65535`. The option is ignored on MQTT 3.1.1.
+Received `Message.topic` always contains the resolved topic name. Invalid
+incoming aliases close the connection with `MQTTProtocolError`: DISCONNECT
+`0x94` for alias zero or above the advertised limit, and `0x82` for an unknown
+alias with an empty topic.
+
 ## Subscribe options (5.0 only)
 
 Additional keyword arguments are available on 5.0 connections:

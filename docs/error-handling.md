@@ -10,6 +10,7 @@ MQTTError
   ├── MQTTTimeoutError      # PINGRESP or CONNACK timed out
   ├── MQTTSubscribeError    # one or more filters rejected by the broker
   ├── MQTTPublishError      # QoS 1/2 publish rejected by the broker
+  ├── MQTTTopicAliasError   # outgoing alias is invalid or unregistered
   └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
 
@@ -24,6 +25,7 @@ from zmqtt import (
     MQTTTimeoutError,
     MQTTSubscribeError,
     MQTTPublishError,
+    MQTTTopicAliasError,
     MQTTInvalidTopicError,
 )
 ```
@@ -122,6 +124,14 @@ connection.
 
 See [PUBACK and PUBREC reason codes](advanced/mqtt5.md#puback-and-pubrec-reason-codes)
 for more detail.
+
+### `MQTTTopicAliasError`
+
+Raised locally by MQTT 5.0 `publish()` or `request()` when a Topic Alias is
+outside `1..65535`, exceeds the broker's advertised maximum, or an empty topic
+references an alias that has not been registered on this connection. The packet
+is not sent. Register the alias with a full topic before reusing it, including
+after reconnecting. See [Topic aliases](advanced/mqtt5.md#topic-aliases).
 
 ### `MQTTProtocolError`
 
