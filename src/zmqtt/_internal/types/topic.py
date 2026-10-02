@@ -1,13 +1,8 @@
-from zmqtt._internal.topic_aliases import validate_alias_range
 from zmqtt.errors import MQTTInvalidTopicError
 
 
-def validate_publish(topic: str, *, topic_alias: int | None = None) -> None:
-    if topic_alias is not None:
-        validate_alias_range(topic_alias)
+def validate_publish(topic: str) -> None:
     if not topic:
-        if topic_alias is not None:
-            return
         msg = "Topic must not be empty"
         raise MQTTInvalidTopicError(msg)
     if "#" in topic or "+" in topic:

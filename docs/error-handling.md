@@ -10,6 +10,7 @@ MQTTError
   ├── MQTTTimeoutError      # PINGRESP or CONNACK timed out
   ├── MQTTSubscribeError    # one or more filters rejected by the broker
   ├── MQTTPublishError      # QoS 1/2 publish rejected by the broker
+  ├── MQTTTopicAliasError   # outgoing alias is invalid or unregistered
   └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
 
@@ -24,6 +25,7 @@ from zmqtt import (
     MQTTTimeoutError,
     MQTTSubscribeError,
     MQTTPublishError,
+    MQTTTopicAliasError,
     MQTTInvalidTopicError,
 )
 ```

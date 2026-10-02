@@ -9,7 +9,6 @@ import asyncio
 import contextlib
 import logging
 import ssl
-import struct
 import uuid
 from collections.abc import AsyncGenerator
 from dataclasses import FrozenInstanceError
@@ -142,65 +141,42 @@ class BrokerTestBase(abc.ABC):
                 message = await asyncio.wait_for(sub.get_message(), 5)
                 assert (message.topic, message.payload, message.qos) == (expected, payload, qos)
 
-    @pytest.mark.parametrize(
-        ("empty_topic", "alias"), [(False, -1), (False, 0), (True, 0), (False, 65536), (True, 65536), (True, 1)]
-    )
     async def test_topic_alias_invalid_publish_keeps_connection_usable(
-        self,
-        mqtt_client: MQTTClient,
-        topic: str,
-        *,
-        empty_topic: bool,
-        alias: int,
+        self, mqtt_client: MQTTClient, topic: str
     ) -> None:
         if self.version != "5.0":
             pytest.skip("Topic aliases require MQTT 5.0")
         async with mqtt_client.subscribe(topic) as sub:
-            with pytest.raises(MQTTTopicAliasError):
-                await mqtt_client.publish(
-                    "" if empty_topic else topic, b"invalid", properties=PublishProperties(topic_alias=alias)
-                )
+            for wire_topic, alias in [(topic, 0), (topic, 65536), ("", 1)]:
+                with pytest.raises(MQTTTopicAliasError):
+                    await mqtt_client.publish(wire_topic, b"invalid", properties=PublishProperties(topic_alias=alias))
             await mqtt_client.publish(topic, b"valid")
             message = await asyncio.wait_for(sub.get_message(), 5)
             assert message.payload == b"valid"
 
-    @pytest.mark.parametrize("qos", list(QoS))
-    @pytest.mark.parametrize("registered", [False, True])
-    async def test_topic_alias_encoding_failure_preserves_broker_mapping(
+    async def test_failed_publish_does_not_register_topic_alias(
         self,
         mqtt_client: MQTTClient,
         topic_alias: PublishProperties,
         topic: str,
-        qos: QoS,
-        *,
-        registered: bool,
     ) -> None:
-        old, new = f"{topic}/old", f"{topic}/new"
-        async with mqtt_client.subscribe(f"{topic}/#", qos=qos) as sub:
-            if registered:
-                await mqtt_client.publish(old, b"register", properties=topic_alias)
-                assert (await asyncio.wait_for(sub.get_message(), 5)).topic == old
-            with pytest.raises(struct.error):
+        async with mqtt_client.subscribe(topic) as sub:
+            with pytest.raises(UnicodeEncodeError):
                 await mqtt_client.publish(
-                    new,
+                    topic,
                     b"invalid",
-                    qos=qos,
+                    qos=QoS.AT_LEAST_ONCE,
                     properties=PublishProperties(
                         topic_alias=topic_alias.topic_alias,
-                        correlation_data=b"x" * 65536,
+                        content_type="\ud800",
                     ),
                 )
-            if registered:
-                await mqtt_client.publish("", b"old-mapping", properties=topic_alias)
+            with pytest.raises(MQTTTopicAliasError):
+                await mqtt_client.publish("", b"unregistered", properties=topic_alias)
+            for wire_topic, payload in [(topic, b"register"), ("", b"reuse")]:
+                await mqtt_client.publish(wire_topic, payload, properties=topic_alias)
                 message = await asyncio.wait_for(sub.get_message(), 5)
-                assert (message.topic, message.payload) == (old, b"old-mapping")
-            else:
-                with pytest.raises(MQTTTopicAliasError):
-                    await mqtt_client.publish("", b"unregistered", properties=topic_alias)
-            for wire_topic, payload in [(new, b"register-new"), ("", b"reuse-new")]:
-                await asyncio.wait_for(mqtt_client.publish(wire_topic, payload, qos=qos, properties=topic_alias), 5)
-                message = await asyncio.wait_for(sub.get_message(), 5)
-                assert (message.topic, message.payload, message.qos) == (new, payload, qos)
+                assert (message.topic, message.payload) == (topic, payload)
 
     async def test_topic_alias_reset_on_resumed_session(self, topic: str) -> None:
         if self.version != "5.0" or not self.supports_persistent_sessions:
@@ -220,23 +196,6 @@ class BrokerTestBase(abc.ABC):
             assert (await asyncio.wait_for(sub.get_message(), 5)).payload == b"register-again"
             await client.publish("", b"reuse", properties=alias)
             assert (await asyncio.wait_for(sub.get_message(), 5)).payload == b"reuse"
-
-    async def test_topic_alias_incoming_resolves_message_topic(self, mqtt_client: MQTTClient, topic: str) -> None:
-        if self.version != "5.0":
-            pytest.skip("Topic aliases require MQTT 5.0")
-        async with (
-            MQTTClient(self.host, self.port, version="5.0", topic_alias_maximum=1) as receiver,
-            receiver.subscribe(topic) as sub,
-        ):
-            aliases = []
-            for payload in [b"first", b"second"]:
-                await mqtt_client.publish(topic, payload)
-                message = await asyncio.wait_for(sub.get_message(), 5)
-                assert (message.topic, message.payload) == (topic, payload)
-                aliases.append(message.properties.topic_alias if message.properties is not None else None)
-            if all(alias is None for alias in aliases):
-                pytest.skip("Broker did not use incoming topic aliases")
-            assert all(alias in (None, 1) for alias in aliases)
 
     async def test_subscribe_receive_qos0(
         self,

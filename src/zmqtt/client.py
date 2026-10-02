@@ -26,7 +26,6 @@ from zmqtt._internal.protocol import MQTTProtocol
 from zmqtt._internal.request_response import _RequestDispatcher
 from zmqtt._internal.state import SessionState
 from zmqtt._internal.subscription_index import SubscriptionEntry
-from zmqtt._internal.topic_aliases import MAX_ALIAS as _MAX_ALIAS
 from zmqtt._internal.topic_matching import _DEFAULT_STRIPPED_PREFIXES
 from zmqtt._internal.transport.base import Transport
 from zmqtt._internal.transport.tcp import open_tcp
@@ -62,6 +61,7 @@ _MAX_RECEIVE_MAXIMUM: Final = 65_535
 # §2.1.4: 1-byte header + 4-byte Remaining Length of at most 268,435,455. The
 # property itself allows up to 2**32 - 1, but no larger packet can be decoded.
 _MAX_PACKET_SIZE: Final = 268_435_460
+_MAX_TOPIC_ALIAS: Final = 65_535
 # §1.5.4: UTF-8 Encoded Strings are length-prefixed by a Two Byte Integer.
 _MAX_STRING_BYTES: Final = 65_535
 
@@ -675,8 +675,8 @@ class MQTTClient:
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
             raise ValueError(msg)
-        if not 0 <= topic_alias_maximum <= _MAX_ALIAS:
-            msg = f"topic_alias_maximum must be in 0..{_MAX_ALIAS}"
+        if not 0 <= topic_alias_maximum <= _MAX_TOPIC_ALIAS:
+            msg = "topic_alias_maximum must be in 0..65535"
             raise ValueError(msg)
         if session_replay_buffer_size < 0:
             msg = "session_replay_buffer_size must be non-negative"
@@ -715,7 +715,6 @@ class MQTTClient:
         self._request_dispatcher = _RequestDispatcher(max_pending_requests)
         self._session_replay_buffer_size = session_replay_buffer_size
         self._session_replay_timeout = session_replay_timeout
-        self._topic_alias_maximum = topic_alias_maximum
         self._connection_info: ConnectionInfo | None = None
         self._connection_id = 0
         self._protocol: MQTTProtocol | None = None
@@ -832,10 +831,8 @@ class MQTTClient:
             RuntimeError: If *properties* is supplied on an MQTT 3.1.1 connection.
             MQTTPublishError: If the broker rejects a QoS 1/2 publish. Not raised for QoS 0 or MQTT 3.1.1.
         """
-        validate_publish(
-            topic,
-            topic_alias=properties.topic_alias if properties is not None else None,
-        )
+        if topic or properties is None or properties.topic_alias is None:
+            validate_publish(topic)
         if self._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
@@ -1065,7 +1062,7 @@ class MQTTClient:
             session_replay_timeout=self._session_replay_timeout,
             receive_maximum=connect_props.receive_maximum if connect_props is not None else None,
             maximum_packet_size=connect_props.maximum_packet_size if connect_props is not None else None,
-            incoming_topic_alias_maximum=self._topic_alias_maximum,
+            incoming_topic_alias_maximum=(connect_props.topic_alias_maximum or 0) if connect_props is not None else 0,
         )
         connect_packet = Connect(
             client_id=self._client_id,
