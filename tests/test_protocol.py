@@ -17,7 +17,7 @@ from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.properties import PublishProperties
-from zmqtt._internal.packets.publish import PubAck, Publish, PubRec, PubRel
+from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import SubAck, Subscribe, SubscriptionRequest, UnsubAck
 from zmqtt._internal.protocol import (
@@ -699,3 +699,38 @@ async def test_publish_qos2_rejected_pubrec_raises_no_pubrel_and_releases_packet
     assert len(transport.sent) == sent_before_ack  # no PUBREL sent
     assert protocol._state.packet_ids.acquire() == pid  # proves release: id is reused
     await _stop_task(read_task)
+
+
+@pytest.mark.parametrize("version", ["3.1.1", "5.0"])
+async def test_unknown_pubrel_is_completed_not_fatal(version: Literal["3.1.1", "5.0"]) -> None:
+    protocol, transport = make_protocol(version=version)
+    transport.feed(encode(PubRel(packet_id=75), version=version))
+    read_task = await _run_read_loop(protocol)
+    await asyncio.sleep(0.05)
+
+    assert not read_task.done()
+    expected_reason = 0x92 if version == "5.0" else 0
+    assert transport.sent == [
+        encode(PubComp(packet_id=75, reason_code=expected_reason), version=version),
+    ]
+
+    await _stop_task(read_task)
+
+
+async def test_pending_futures_chain_the_error_that_killed_the_connection() -> None:
+    protocol, transport = make_protocol()
+    future: asyncio.Future[SubAck] = asyncio.get_running_loop().create_future()
+    protocol._state.pending_subs[1] = future
+    transport.feed(encode(ConnAck(session_present=False, return_code=0), version="3.1.1"))
+    run_task = asyncio.create_task(protocol.run())
+
+    with pytest.raises(MQTTDisconnectedError) as exc_info:
+        await asyncio.wait_for(future, timeout=1.0)
+    assert isinstance(exc_info.value.__cause__, MQTTProtocolError)
+
+    with pytest.raises(MQTTDisconnectedError) as dead_info:
+        protocol._ensure_alive()
+    assert isinstance(dead_info.value.__cause__, MQTTProtocolError)
+
+    with pytest.raises(MQTTProtocolError):
+        await run_task

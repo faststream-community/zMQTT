@@ -205,6 +205,7 @@ class MQTTProtocol:
         self._subscription_guards = _SubscriptionGuards()
         self._disconnecting = False
         self._dead = False
+        self._death_cause: Exception | None = None
         # MQTT 5 §3.2.2.3.4: absent Maximum QoS means the server accepts QoS 2,
         # and 3.1.1 has no CONNACK properties at all — default to EXACTLY_ONCE
         # so publish() never has to branch on None.
@@ -266,12 +267,17 @@ class MQTTProtocol:
         self.started_event.set()
         try:
             await asyncio.gather(read_task, ping_task)
-        except BaseException:
+        except MQTTProtocolError as e:
+            log.error("Protocol error, closing connection: %s", e)  # noqa: TRY400
+            self._death_cause = e
+            raise
+        except Exception as e:
+            self._death_cause = e
+            raise
+        finally:
             read_task.cancel()
             ping_task.cancel()
             await asyncio.gather(read_task, ping_task, return_exceptions=True)
-            raise
-        finally:
             self.started_event.clear()
             self._dead = True
             self._cancel_pending()
@@ -287,6 +293,7 @@ class MQTTProtocol:
     def _cancel_pending(self) -> None:  # noqa: C901
         """Fail all futures awaiting broker responses — called when run() exits."""
         exc = MQTTDisconnectedError("Connection lost")
+        exc.__cause__ = self._death_cause
         for sub_f in self._state.pending_subs.values():
             if not sub_f.done():
                 sub_f.set_exception(exc)
@@ -315,7 +322,7 @@ class MQTTProtocol:
         """
         if self._dead:
             msg = "Connection lost"
-            raise MQTTDisconnectedError(msg)
+            raise MQTTDisconnectedError(msg) from self._death_cause
 
     async def publish(self, packet: Publish) -> PubAck | PubComp | None:
         """

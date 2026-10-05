@@ -20,6 +20,8 @@ log = logging.getLogger("zmqtt.protocol")
 
 # MQTT 5.0 §3.3.4: DISCONNECT reason code for a server exceeding the client's Receive Maximum.
 _RECEIVE_MAXIMUM_EXCEEDED: Final = 0x93
+# MQTT 5.0 §3.7.2.1: PUBCOMP reason code for a PUBREL the receiver has no state for.
+_PACKET_IDENTIFIER_NOT_FOUND: Final = 0x92
 
 
 class InboundConnection(Protocol):
@@ -339,8 +341,11 @@ class InboundPublishFlow:
         """Complete an inbound QoS 2 exchange."""
         flight = self._state.inflight_qos2_in.pop(packet.packet_id, None)
         if flight is None:
-            msg = f"PUBREL for unknown packet_id {packet.packet_id}"
-            raise MQTTProtocolError(msg)
+            log.warning("PUBREL for unknown packet_id %d, completing it", packet.packet_id)
+            await self._connection.send_packet(
+                PubComp(packet_id=packet.packet_id, reason_code=_PACKET_IDENTIFIER_NOT_FOUND),
+            )
+            return
         await self._complete(PubComp(packet_id=packet.packet_id))
         if not flight.delivered:
             await self._deliver(flight.recipient, ack_callback=None)
