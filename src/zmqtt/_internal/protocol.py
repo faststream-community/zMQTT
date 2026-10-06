@@ -42,6 +42,7 @@ from zmqtt.errors import (
     MQTTProtocolError,
     MQTTPublishError,
     MQTTQoSExceededError,
+    MQTTRetainNotAvailableError,
     MQTTSubscribeError,
     MQTTTimeoutError,
 )
@@ -209,6 +210,8 @@ class MQTTProtocol:
         # and 3.1.1 has no CONNACK properties at all — default to EXACTLY_ONCE
         # so publish() never has to branch on None.
         self._max_publish_qos: QoS = QoS.EXACTLY_ONCE
+        # MQTT 5 §3.2.2.3.5: absent Retain Available means retain is supported.
+        self._retain_available = True
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
@@ -244,8 +247,10 @@ class MQTTProtocol:
                         # Properties present but Maximum QoS absent: spec default is QoS 2.
                         max_qos = pkt.properties.maximum_qos
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
+                        self._retain_available = pkt.properties.retain_available is not False
                     else:  # 3.1.1 has no CONNACK properties: no limit.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
+                        self._retain_available = True
                     self.inbound.begin_session(session_present=pkt.session_present)
                     return pkt
 
@@ -325,6 +330,8 @@ class MQTTProtocol:
         max_qos = self._max_publish_qos
         if packet.qos > max_qos:
             raise MQTTQoSExceededError(requested=int(packet.qos), maximum=int(max_qos))
+        if packet.retain and not self._retain_available:
+            raise MQTTRetainNotAvailableError
         match packet.qos:
             case QoS.AT_MOST_ONCE:
                 await self._send(self._encode(packet))

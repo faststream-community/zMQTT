@@ -10,6 +10,7 @@ MQTTError
   ├── MQTTTimeoutError      # PINGRESP or CONNACK timed out
   ├── MQTTSubscribeError    # one or more filters rejected by the broker
   ├── MQTTPublishError      # QoS 1/2 publish rejected by the broker
+  ├── MQTTRetainNotAvailableError # retained publish, but the broker has no retain support
   └── MQTTInvalidTopicError # topic string failed MQTT validation
 ```
 
