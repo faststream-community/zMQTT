@@ -1,6 +1,6 @@
 services:
   artemis:
-    image: apache/activemq-artemis:latest-alpine
+    image: apache/activemq-artemis:latest-alpine@sha256:1bce124d2324faeb1253e2db4bb68d64decf46412ecfd8d9ef46c08b1b4af5b4
     environment:
       ANONYMOUS_LOGIN: "true"
     ports:
@@ -23,23 +23,23 @@ services:
       test:
         [
           "CMD-SHELL",
-          "mosquitto_ctrl -h 127.0.0.1 -p 1883 -u admin -P admin dynsec getClient zmqtt-mosquitto 2>&1 | grep -q zmqtt-tests",
+          "test -f /mosquitto/data/dynsec-ready && mosquitto_ctrl -h 127.0.0.1 -p 1883 -u admin -P admin dynsec getClient zmqtt-mosquitto 2>&1 | grep -q zmqtt-tests",
         ]
       interval: 1s
       timeout: 2s
-      retries: 30
+      retries: 120
     security_opt:
       - no-new-privileges:true
 
   hivemq:
-    image: hivemq/hivemq-ce:latest
+    image: hivemq/hivemq-ce@sha256:7ae39e84654a41ced6e946dd84f131d508bc2b862ec96265b7f23d241db214da
     ports:
       - "1886:1883"
     security_opt:
       - no-new-privileges:true
 
   nanomq:
-    image: emqx/nanomq:latest
+    image: emqx/nanomq:0.25.5@sha256:a03605fe4061452609e0cd89e4ac0c382dc5bb338319e712bb25b6d21a72ba0a
     ports:
       - "1887:1883"
     security_opt:

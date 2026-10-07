@@ -13,18 +13,61 @@ dynsec() {
     "$ctrl" -h 127.0.0.1 -p "$port" -u admin -P admin dynsec "$@" 2>&1
 }
 
-grant() {
+# Read-back is authoritative: mosquitto_ctrl can exit 0 after a rejected
+# command. Keep the last response for diagnostics, without printing arguments.
+ensure() {
+    stage=$1
+    check=$2
+    apply=$3
+    attempt=0
+    last_response="not applied"
+    until readback=$("$check") && [ -n "$readback" ]; do
+        if [ "$attempt" -ge 10 ]; then
+            echo "Dynamic Security stage failed: $stage" >&2
+            printf '%s\n' "$last_response" "$readback" >&2
+            return 1
+        fi
+        attempt=$((attempt + 1))
+        last_response=$("$apply") || :
+        if readback=$("$check") && [ -n "$readback" ]; then
+            return 0
+        fi
+        sleep 1
+    done
+}
+
+check_field() {
+    pattern=$1
+    shift
+    response=$(dynsec "$@") || { printf '%s\n' "$response"; return 1; }
+    printf '%s\n' "$response"
+    printf '%s\n' "$response" | grep -q "$pattern"
+}
+
+check_group() { check_field '^Groupname:' getGroup zmqtt-anonymous-clients; }
+create_group() { dynsec createGroup zmqtt-anonymous-clients; }
+check_anonymous_role() { check_field '^Rolename:' getRole zmqtt-anonymous-role; }
+create_anonymous_role() { dynsec createRole zmqtt-anonymous-role; }
+check_test_role() { check_field '^Rolename:' getRole zmqtt-tests; }
+create_test_role() { dynsec createRole zmqtt-tests; }
+check_client() { check_field '^Username:' getClient zmqtt-mosquitto; }
+create_client() { dynsec createClient zmqtt-mosquitto -p zmqtt-mosquitto; }
+
+check_links() {
+    check_field zmqtt-anonymous-clients getAnonymousGroup || return 1
+    check_field zmqtt-anonymous-role getGroup zmqtt-anonymous-clients || return 1
+    check_field zmqtt-tests getClient zmqtt-mosquitto || return 1
+}
+apply_links() {
+    dynsec addGroupRole zmqtt-anonymous-clients zmqtt-anonymous-role 10
+    dynsec setAnonymousGroup zmqtt-anonymous-clients
+    dynsec addClientRole zmqtt-mosquitto zmqtt-tests 10
+}
+apply_acls() {
     dynsec setDefaultACLAccess publishClientSend allow
     dynsec setDefaultACLAccess subscribe allow
-    dynsec createGroup zmqtt-anonymous-clients
-    dynsec createRole zmqtt-anonymous-role
-    dynsec addGroupRole zmqtt-anonymous-clients zmqtt-anonymous-role 10
     dynsec addRoleACL zmqtt-anonymous-role subscribePattern '#' allow 10
     dynsec addRoleACL zmqtt-anonymous-role publishClientSend '#' allow 10
-    dynsec setAnonymousGroup zmqtt-anonymous-clients
-    dynsec createClient zmqtt-mosquitto -p zmqtt-mosquitto
-    dynsec createRole zmqtt-tests
-    dynsec addClientRole zmqtt-mosquitto zmqtt-tests 10
     dynsec addRoleACL zmqtt-tests subscribePattern '#' allow 10
     dynsec addRoleACL zmqtt-tests publishClientSend '#' allow 10
     dynsec addRoleACL zmqtt-tests publishClientSend 'zmqtt/e2e/denied' deny 20
@@ -34,16 +77,18 @@ grant() {
 
 has_acls() {
     acls=$(dynsec getRole "$1" | tr -s ' ')
+    printf '%s\n' "$acls"
     shift
     for acl in "$@"; do
         printf '%s\n' "$acls" | grep -qF "$acl" || return 1
     done
 }
 
-granted() {
-    dynsec getAnonymousGroup | grep -q zmqtt-anonymous-clients || return 1
-    dynsec getGroup zmqtt-anonymous-clients | grep -q zmqtt-anonymous-role || return 1
-    dynsec getClient zmqtt-mosquitto | grep -q zmqtt-tests || return 1
+check_acls() {
+    defaults=$(dynsec getDefaultACLAccess | tr -s ' ')
+    printf '%s\n' "$defaults"
+    printf '%s\n' "$defaults" | grep -qF 'publishClientSend : allow' || return 1
+    printf '%s\n' "$defaults" | grep -qF 'subscribe : allow' || return 1
     has_acls zmqtt-anonymous-role \
         'subscribePattern : allow : #' \
         'publishClientSend : allow : #' || return 1
@@ -53,6 +98,7 @@ granted() {
         'publishClientSend : deny : zmqtt/e2e/denied' \
         'unsubscribePattern : allow : #' \
         'unsubscribePattern : deny : zmqtt/unsuback/denied/#' || return 1
+    echo 'ACLs verified'
 }
 
 attempt=0
@@ -65,17 +111,14 @@ until dynsec getClient admin | grep -q '^Username:'; do
     sleep 1
 done
 
-# mosquitto_ctrl exits 0 even when the broker rejects a command, and a dropped
-# response is silent, so applying the grants once proves nothing. Every command
-# above is idempotent, so re-apply them until a read-back confirms all of them.
-attempt=0
-until grant >/dev/null && granted; do
-    attempt=$((attempt + 1))
-    if [ "$attempt" -ge 3 ]; then
-        echo "Dynamic Security grants were not applied:" >&2
-        dynsec getClient zmqtt-mosquitto >&2
-        dynsec getRole zmqtt-tests >&2
-        exit 1
-    fi
-    sleep 1
-done
+ensure anonymous-group check_group create_group
+ensure anonymous-role check_anonymous_role create_anonymous_role
+ensure test-role check_test_role create_test_role
+ensure test-client check_client create_client
+ensure role-bindings check_links apply_links
+ensure acls check_acls apply_acls
+if ! verification=$(check_links && check_acls); then
+    echo "Dynamic Security final verification failed:" >&2
+    printf '%s\n' "$verification" >&2
+    exit 1
+fi

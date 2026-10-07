@@ -61,26 +61,29 @@ jobs:
       - name: Start Mosquitto test service
         run: docker compose up --detach --wait mosquitto
 
-      - name: Wait for brokers
-        run: |
-          echo "Waiting for brokers to be ready..."
-          sleep 15
-
-          # Test connections to brokers
-          for port in 1883 1884 1886 1887 1888; do
-            nc -zv localhost $port || echo "Port $port not responding"
-          done
-
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --group dev
+      - name: Wait for brokers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mosquitto-clients
+          timeout 60s bash <<'SH'
+          set -eu
+          for port in 1883 1884 1886 1887 1888; do
+            echo "Waiting for MQTT on port $port"
+            until timeout 2s mosquitto_pub -h 127.0.0.1 -p "$port" -t zmqtt/ci/readiness -m ready -q 1; do
+              sleep 1
+            done
+          done
+          SH
       - name: Run tests
         if: matrix.python-version != '3.14'
-        run: uv run pytest -vv
+        run: uv run pytest -vv -rx
       - name: Run tests with coverage
         if: matrix.python-version == '3.14'
-        run: uv run pytest -vv --cov=src/zmqtt --cov-report=term --cov-report=html
+        run: uv run pytest -vv -rx --cov=src/zmqtt --cov-report=term --cov-report=html
       - name: Store coverage HTML
         if: matrix.python-version == '3.14'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -118,7 +121,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --group dev
-      - run: uv run pytest -vv --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
+      - run: uv run pytest -vv -rx --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
 
   tests-windows:
     name: Python ${{ matrix.python-version }} (Windows)
@@ -139,6 +142,8 @@ jobs:
           winget install -e --id EclipseFoundation.Mosquitto --accept-source-agreements --accept-package-agreements --silent
           $mosquittoDir = "C:\Program Files\mosquitto"
           $ctrl = "$mosquittoDir/mosquitto_ctrl.exe"
+          & "$mosquittoDir/mosquitto.exe" -h
+          & $ctrl --help
           $security = Join-Path $env:TEMP "dynamic-security.json"
           & $ctrl dynsec init $security admin admin
           $config = @(
@@ -178,7 +183,7 @@ jobs:
               }
               throw "Dynamic Security bootstrap failed"
             }
-            & uv run pytest -vv --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
+            & uv run pytest -vv -rx --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
             $testExitCode = $LASTEXITCODE
           } finally {
             $broker.Refresh()

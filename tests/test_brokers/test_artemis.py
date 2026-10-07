@@ -4,7 +4,7 @@ import uuid
 import pytest
 
 from tests.test_brokers._base import BrokerTestBase
-from zmqtt import MQTTClient, QoS, ReconnectConfig, Subscription, Will, WillProperties
+from zmqtt import MQTTClient, MQTTProtocolError, QoS, ReconnectConfig, Subscription, Will, WillProperties
 
 
 class BaseTestArtemis(BrokerTestBase):
@@ -102,6 +102,69 @@ class BaseTestArtemis(BrokerTestBase):
         assert [m.payload for m in plain_msgs] == [b"m0", b"m1", b"m2"]
         assert {m.properties.subscription_identifier for m in plain_msgs if m.properties} == {2}
 
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    @pytest.mark.xfail(
+        strict=False,
+        raises=pytest.RaisesExc(MQTTProtocolError, match=r"^Expected CONNACK, got Publish\("),
+        reason="Artemis sends PUBLISH before CONNACK: "
+        "https://github.com/faststream-community/zMQTT/actions/runs/37662552690",
+    )
+    async def test_persistent_session_replay_waits_for_subscription(self, topic: str, qos: QoS) -> None:
+        await super().test_persistent_session_replay_waits_for_subscription(topic, qos)
+
+    @pytest.mark.xfail(
+        strict=False,
+        raises=pytest.RaisesExc(MQTTProtocolError, match=r"^Expected CONNACK, got Publish\("),
+        reason="Artemis sends PUBLISH before CONNACK: "
+        "https://github.com/faststream-community/zMQTT/actions/runs/37662552690",
+    )
+    async def test_persistent_session_replay_preserves_manual_ack(self, topic: str) -> None:
+        await super().test_persistent_session_replay_preserves_manual_ack(topic)
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    @pytest.mark.xfail(
+        strict=False,
+        raises=pytest.RaisesExc(MQTTProtocolError, match=r"^Expected CONNACK, got Publish\("),
+        reason="Artemis sends PUBLISH before CONNACK: "
+        "https://github.com/faststream-community/zMQTT/actions/runs/37662552690",
+    )
+    async def test_detach_preserves_unprocessed_messages_and_active_ack(self, topic: str, qos: QoS) -> None:
+        await super().test_detach_preserves_unprocessed_messages_and_active_ack(topic, qos)
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    @pytest.mark.parametrize("auto_ack", [False, True])
+    @pytest.mark.xfail(
+        strict=False,
+        raises=pytest.RaisesExc(MQTTProtocolError, match=r"^Expected CONNACK, got Publish\("),
+        reason="Artemis sends PUBLISH before CONNACK: "
+        "https://github.com/faststream-community/zMQTT/actions/runs/37662552690",
+    )
+    async def test_detach_preserves_messages_across_automatic_reconnect(
+        self, topic: str, qos: QoS, auto_ack: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await super().test_detach_preserves_messages_across_automatic_reconnect(topic, qos, auto_ack, monkeypatch)
+
+    @pytest.mark.xfail(
+        strict=False,
+        raises=pytest.RaisesExc(MQTTProtocolError, match=r"^Expected CONNACK, got Publish\("),
+        reason="Artemis sends PUBLISH before CONNACK: "
+        "https://github.com/faststream-community/zMQTT/actions/runs/37662552690",
+    )
+    async def test_persistent_session_replay_respects_subscription_buffer(self, topic: str) -> None:
+        await super().test_persistent_session_replay_respects_subscription_buffer(topic)
+
+    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
+    @pytest.mark.xfail(
+        strict=False,
+        raises=pytest.RaisesExc(MQTTProtocolError, match=r"^Expected CONNACK, got Publish\("),
+        reason="Artemis sends PUBLISH before CONNACK: "
+        "https://github.com/faststream-community/zMQTT/actions/runs/37662552690",
+    )
+    async def test_persistent_session_replay_drops_without_ack_after_timeout(
+        self, topic: str, qos: QoS, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await super().test_persistent_session_replay_drops_without_ack_after_timeout(topic, qos, caplog)
+
 
 class TestArtemisV311(BaseTestArtemis):
     host = "127.0.0.1"
@@ -113,11 +176,3 @@ class TestArtemisV5(BaseTestArtemis):
     host = "127.0.0.1"
     port = 1883
     version = "5.0"
-
-    @pytest.mark.parametrize("qos", [QoS.AT_LEAST_ONCE, QoS.EXACTLY_ONCE])
-    @pytest.mark.xfail(
-        strict=False,
-        reason="Artemis race: queued message may arrive before CONNACK on session resume",
-    )
-    async def test_persistent_session_replay_waits_for_subscription(self, topic: str, qos: QoS) -> None:
-        await super().test_persistent_session_replay_waits_for_subscription(topic, qos)

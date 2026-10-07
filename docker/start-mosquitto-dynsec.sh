@@ -15,4 +15,6 @@ broker_pid=$!
 
 /bin/sh /mosquitto/config/dynsec-bootstrap.sh
 
+touch "$data_dir/dynsec-ready"
+
 wait "$broker_pid"
