@@ -66,14 +66,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --group dev
       - name: Wait for brokers
+        timeout-minutes: 2
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mosquitto-clients
-          timeout 60s bash <<'SH'
-          set -eu
+          image=$(docker compose images -q mosquitto)
+          docker run --rm --init -i --pull never --network host --entrypoint timeout "$image" -s KILL 60 sh -eu <<'SH'
           for port in 1883 1884 1886 1887 1888; do
             echo "Waiting for MQTT on port $port"
-            until timeout 2s mosquitto_pub -h 127.0.0.1 -p "$port" -t zmqtt/ci/readiness -m ready -q 1; do
+            until timeout -s KILL 2 mosquitto_pub -h 127.0.0.1 -p "$port" -t zmqtt/ci/readiness -m ready -q 1; do
               sleep 1
             done
           done
