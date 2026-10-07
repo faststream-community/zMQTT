@@ -2,6 +2,35 @@
 
 <!-- version list -->
 
+## v0.2.5 (2026-10-07)
+
+### Bug Fixes
+
+- Complete unknown PUBREL with PUBCOMP instead of dropping the connection
+  ([#116](https://github.com/faststream-community/zMQTT/pull/116),
+  [`029356c`](https://github.com/faststream-community/zMQTT/commit/029356c55e53fc83b07d9417eb680d8258cca9ef))
+
+- **protocol**: Honor server keepalive and disable zero interval pings
+  ([#114](https://github.com/faststream-community/zMQTT/pull/114),
+  [`39bf0d2`](https://github.com/faststream-community/zMQTT/commit/39bf0d21b5d7c25cc4156571b473289e9d25ffc5))
+
+### Continuous Integration
+
+- **deps**: Bump the github-actions group with 2 updates
+  ([#113](https://github.com/faststream-community/zMQTT/pull/113),
+  [`f2904b4`](https://github.com/faststream-community/zMQTT/commit/f2904b4e9bed56e62d49770333c356fedb96761b))
+
+### Features
+
+- Detach subscription without sending UNSUBSCRIBE for graceful shutdown
+  ([#107](https://github.com/faststream-community/zMQTT/pull/107),
+  [`0be34c4`](https://github.com/faststream-community/zMQTT/commit/0be34c4a7d86a401d1068b75aba42307b05c7556))
+
+- **client**: Honor the server's Retain Available
+  ([#117](https://github.com/faststream-community/zMQTT/pull/117),
+  [`ec81749`](https://github.com/faststream-community/zMQTT/commit/ec817496b554fd9efc502ba5842c252819663ff6))
+
+
 ## v0.2.4 (2026-09-28)
 
 ### Bug Fixes
