@@ -46,13 +46,6 @@ jobs:
         options: >-
           --security-opt no-new-privileges:true
 
-      emqx:
-        image: emqx/emqx@sha256:0ba29902a8e552f7152754860b4b61b49a7e16fa376035bcf10021e944b2c0a0  # 6.2.2
-        ports:
-          - 1888:1883
-        options: >-
-          --security-opt no-new-privileges:true
-
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -60,6 +53,9 @@ jobs:
 
       - name: Start Mosquitto test service
         run: docker compose up --detach --wait mosquitto
+
+      - name: Start EMQX test service
+        run: docker compose up --detach emqx
 
       - name: Wait for brokers
         run: |
@@ -81,6 +77,9 @@ jobs:
       - name: Run tests with coverage
         if: matrix.python-version == '3.14'
         run: uv run pytest -vv --cov=src/zmqtt --cov-report=term --cov-report=html
+      - name: EMQX logs on failure
+        if: failure()
+        run: docker compose logs emqx
       - name: Store coverage HTML
         if: matrix.python-version == '3.14'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -118,7 +117,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked --group dev
-      - run: uv run pytest -vv --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
+      - run: uv run pytest -vv --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py --ignore=tests/test_brokers/test_emqx_auth.py
 
   tests-windows:
     name: Python ${{ matrix.python-version }} (Windows)
@@ -178,7 +177,7 @@ jobs:
               }
               throw "Dynamic Security bootstrap failed"
             }
-            & uv run pytest -vv --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py
+            & uv run pytest -vv --ignore=tests/test_brokers/test_artemis.py --ignore=tests/test_brokers/test_hivemq.py --ignore=tests/test_brokers/test_nanomq.py --ignore=tests/test_brokers/test_emqx.py --ignore=tests/test_brokers/test_emqx_auth.py
             $testExitCode = $LASTEXITCODE
           } finally {
             $broker.Refresh()
