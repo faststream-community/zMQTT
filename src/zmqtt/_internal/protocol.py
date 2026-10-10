@@ -8,7 +8,7 @@ from collections.abc import AsyncGenerator, Iterable
 from typing import Final, Literal
 
 from zmqtt._internal import topic_matching
-from zmqtt._internal._compat import wait_for
+from zmqtt._internal._compat import defer_cancellation, wait_for
 from zmqtt._internal.auth import AuthHandler
 from zmqtt._internal.inbound import InboundPublishFlow
 from zmqtt._internal.packets.auth import Auth
@@ -210,6 +210,8 @@ class MQTTProtocol:
         self._subscription_guards = _SubscriptionGuards()
         self._disconnecting = False
         self._dead = False
+        self._abandoned_reauth = False
+        self._read_task: asyncio.Task[None] | None = None
         self._auth_handler: AuthHandler | None = auth_handler
         self._death_cause: Exception | None = None
         # MQTT 5 §3.2.2.3.4: absent Maximum QoS means the server accepts QoS 2,
@@ -244,20 +246,7 @@ class MQTTProtocol:
                 self._buf.feed(data)
                 for pkt in self._buf:
                     if isinstance(pkt, Auth):
-                        if pkt.reason_code != 0x18 or self._auth_handler is None:
-                            msg = f"Unexpected AUTH packet during CONNECT: {pkt!r}"
-                            raise MQTTProtocolError(msg)
-                        self._require_auth_method(pkt.properties)
-                        challenge_data = self._auth_data(pkt.properties)
-                        response_data = await self._auth_handler.continue_data(challenge_data)
-                        response = Auth(
-                            reason_code=0x18,
-                            properties=AuthProperties(
-                                authentication_method=self._auth_handler.method,
-                                authentication_data=response_data,
-                            ),
-                        )
-                        await self._send(self._encode(response))
+                        await self._handle_connect_auth(pkt)
                         continue
 
                     if not isinstance(pkt, ConnAck):
@@ -286,6 +275,22 @@ class MQTTProtocol:
                     self.inbound.begin_session(session_present=pkt.session_present)
                     return pkt
 
+    async def _handle_connect_auth(self, packet: Auth) -> None:
+        if packet.reason_code != 0x18 or self._auth_handler is None:
+            msg = f"Unexpected AUTH packet during CONNECT: {packet!r}"
+            raise MQTTProtocolError(msg)
+        self._require_auth_method(packet.properties)
+        challenge_data = self._auth_data(packet.properties)
+        response_data = await self._auth_handler.continue_data(challenge_data)
+        response = Auth(
+            reason_code=0x18,
+            properties=AuthProperties(
+                authentication_method=self._auth_handler.method,
+                authentication_data=response_data,
+            ),
+        )
+        await self._send(self._encode(response))
+
     @contextlib.asynccontextmanager
     async def _rejecting_oversized_packets(self) -> AsyncGenerator[None]:
         """Close with DISCONNECT 0x95 when the broker exceeds our Maximum Packet Size."""
@@ -299,10 +304,20 @@ class MQTTProtocol:
     async def run(self) -> None:
         """Run read loop and ping loop concurrently until disconnection."""
         read_task = asyncio.create_task(self._read_loop())
+        self._read_task = read_task
         ping_task = asyncio.create_task(self._ping_loop())
         self.started_event.set()
         try:
-            await asyncio.gather(read_task, ping_task)
+            pending = {read_task, ping_task}
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    # Internal read-loop cancellation is a connection failure.
+                    # Cancellation of run() itself still propagates unchanged.
+                    if task is read_task and task.cancelled() and self._abandoned_reauth:
+                        msg = "Re-authentication was abandoned"
+                        raise MQTTDisconnectedError(msg)  # noqa: TRY301 - translate only internal cancellation
+                    task.result()
         except MQTTProtocolError as e:
             log.error("Protocol error, closing connection: %s", e)  # noqa: TRY400
             self._death_cause = e
@@ -311,10 +326,15 @@ class MQTTProtocol:
             self._death_cause = e
             raise
         finally:
-            read_task.cancel()
-            ping_task.cancel()
-            await asyncio.gather(read_task, ping_task, return_exceptions=True)
-            raise
+            self._dead = True
+            self._cancel_pending()
+            async with defer_cancellation():
+                read_task.cancel()
+                ping_task.cancel()
+                await asyncio.gather(read_task, ping_task, return_exceptions=True)
+                self._read_task = None
+                with contextlib.suppress(Exception):
+                    await self._transport.close()
 
     async def disconnect(self) -> None:
         """Send DISCONNECT and close the transport."""
@@ -689,6 +709,10 @@ class MQTTProtocol:
         wire). No DISCONNECT is sent: it would queue behind the same stalled write.
         """
         self._dead = True
+        self._abandoned_reauth = True
+        # Closing the socket cannot wake a handler waiting inside the read loop.
+        if self._read_task is not None:
+            self._read_task.cancel()
         await asyncio.shield(self.abort())
 
     async def _read_loop(self) -> None:
@@ -857,18 +881,19 @@ class MQTTProtocol:
                     authentication_data=response_data,
                 ),
             )
-            await self.send_packet(response)
+            if not pending_auth.done() and not self._dead:
+                await self.send_packet(response)
             return
 
         if packet.reason_code == 0x00:
             try:
                 await self._auth_handler.finalize_data(auth_data)
             except Exception as e:
-                # Surface the handler's error to reauthenticate(); the read loop
-                # then dies and the connection is dropped.
-                pending_auth.set_exception(e)
+                if not pending_auth.done():
+                    pending_auth.set_exception(e)
                 raise
-            pending_auth.set_result(packet)
+            if not pending_auth.done() and not self._dead:
+                pending_auth.set_result(packet)
             return
 
         msg = f"Unexpected AUTH reason_code 0x{packet.reason_code:02X}"
