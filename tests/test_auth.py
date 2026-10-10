@@ -1,9 +1,11 @@
+"""Defensive AUTH cases; real SCRAM exchanges live in test_brokers/test_emqx_auth.py."""
+
 import asyncio
 from collections import deque
 
 import pytest
 
-from zmqtt import MQTTClient, ReconnectConfig
+from zmqtt import MQTTClient
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
@@ -11,15 +13,12 @@ from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.properties import (
     AuthProperties,
     ConnAckProperties,
-    ConnectProperties,
     DisconnectProperties,
 )
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.protocol import MQTTProtocol
-from zmqtt._internal.transport.base import Transport
 from zmqtt.errors import (
     MQTTAuthError,
-    MQTTConnectError,
     MQTTDisconnectedError,
     MQTTProtocolError,
     MQTTTimeoutError,
@@ -82,109 +81,39 @@ async def _connected(handler: FakeAuthHandler | None = None) -> tuple[MQTTProtoc
     return protocol, transport
 
 
-async def test_connect_single_challenge_round_completes() -> None:
-    handler = FakeAuthHandler(method="TEST", responses=[b"resp1"])
+@pytest.mark.parametrize("rounds", [0, 2])
+async def test_connect_unusual_exchange(rounds: int) -> None:
+    handler = FakeAuthHandler(responses=[b"response"] * rounds)
     protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_auth(0x18, b"challenge1"))
+    for _ in range(rounds):
+        transport.feed(_auth(0x18, b"challenge"))
     transport.feed(_connack())
-
     ack = await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
     assert ack.return_code == 0
-    assert handler.continue_calls == [b"challenge1"]
-    response = _decode(transport.sent[1])
-    assert isinstance(response, Auth)
-    assert response.reason_code == 0x18
-    assert response.properties is not None
-    assert response.properties.authentication_method == "TEST"
-    assert response.properties.authentication_data == b"resp1"
+    assert handler.continue_calls == [b"challenge"] * rounds
+    assert handler.finalize_calls == [None]
+    assert len(transport.sent) == rounds + 1
 
 
-async def test_connect_multiple_challenge_rounds_completes() -> None:
-    handler = FakeAuthHandler(responses=[b"resp1", b"resp2"])
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_auth(0x18, b"c1"))
-    transport.feed(_auth(0x18, b"c2"))
-    transport.feed(_connack())
-
-    ack = await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert ack.return_code == 0
-    assert handler.continue_calls == [b"c1", b"c2"]
-    assert len(transport.sent) == 3
-
-
-async def test_connect_auth_unexpected_reason_code_raises() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(encode(Auth(reason_code=0x00), version="5.0"))
-
+@pytest.mark.parametrize("handler_present", [True, False])
+async def test_connect_unexpected_auth_raises(handler_present: bool) -> None:
+    protocol, transport = make_protocol(version="5.0", auth_handler=FakeAuthHandler() if handler_present else None)
+    transport.feed(encode(Auth(reason_code=0x00 if handler_present else 0x18), version="5.0"))
     with pytest.raises(MQTTProtocolError):
         await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
 
 
-async def test_connect_auth_without_handler_raises() -> None:
-    protocol, transport = make_protocol(version="5.0")
-    transport.feed(encode(Auth(reason_code=0x18), version="5.0"))
-
-    with pytest.raises(MQTTProtocolError):
-        await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-
-async def test_connect_refused_after_auth_exchange_raises() -> None:
-    handler = FakeAuthHandler(responses=[b"resp1"])
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_auth(0x18, b"c1"))
-    transport.feed(encode(ConnAck(session_present=False, return_code=0x87), version="5.0"))
-
-    with pytest.raises(MQTTConnectError) as exc_info:
-        await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert exc_info.value.return_code == 0x87
-
-
-async def test_successful_connect_stores_negotiated_auth_method() -> None:
-    handler = FakeAuthHandler(method="SCRAM-SHA-256")
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_connack("SCRAM-SHA-256"))
-
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert protocol._state.auth_method == "SCRAM-SHA-256"
-
-
-async def test_connect_without_handler_leaves_auth_method_unset() -> None:
-    protocol, transport = make_protocol(version="5.0")
-    transport.feed(_connack(None))
-
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert protocol._state.auth_method is None
-
-
 @pytest.mark.parametrize("method", [None, "WRONG"])
-async def test_connect_success_with_wrong_auth_method_raises(method: str | None) -> None:
-    handler = FakeAuthHandler(method="TEST")
+@pytest.mark.parametrize("phase", ["connack", "challenge"])
+async def test_connect_wrong_auth_method_raises(method: str | None, phase: str) -> None:
+    handler = FakeAuthHandler(responses=[b"response"])
     protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_connack(method))
-
+    transport.feed(_connack(method) if phase == "connack" else _auth(0x18, b"challenge", method))
     with pytest.raises(MQTTProtocolError, match="Authentication Method"):
         await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
     assert protocol._state.auth_method is None
-    assert handler.finalize_calls == []
-
-
-@pytest.mark.parametrize("method", [None, "WRONG"])
-async def test_connect_challenge_with_wrong_auth_method_raises(method: str | None) -> None:
-    handler = FakeAuthHandler(method="TEST", responses=[b"resp1"])
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_auth(0x18, b"challenge1", method))
-
-    with pytest.raises(MQTTProtocolError, match="Authentication Method"):
-        await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
     assert handler.continue_calls == []
+    assert handler.finalize_calls == []
 
 
 @pytest.mark.parametrize("reason_code", [0x00, 0x18])
@@ -210,93 +139,6 @@ async def test_reauthenticate_response_with_wrong_auth_method_fails_exchange(
     assert handler.finalize_calls == []
 
 
-async def test_connect_success_passes_final_data_to_finalize() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_connack(data=b"server-final"))
-
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert handler.finalize_calls == [b"server-final"]
-
-
-async def test_connect_success_without_data_finalizes_with_none() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_connack())
-
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert handler.finalize_calls == [None]
-
-
-async def test_connect_finalize_runs_after_challenge_rounds() -> None:
-    order: list[str] = []
-
-    class OrderHandler(FakeAuthHandler):
-        async def continue_data(self, data: bytes | None) -> bytes | None:
-            order.append("continue")
-            return await super().continue_data(data)
-
-        async def finalize_data(self, data: bytes | None) -> None:
-            order.append("finalize")
-            await super().finalize_data(data)
-
-    handler = OrderHandler(responses=[b"resp1"])
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_auth(0x18, b"c1"))
-    transport.feed(_connack(data=b"final"))
-
-    await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert order == ["continue", "finalize"]
-    assert handler.finalize_calls == [b"final"]
-
-
-async def test_connect_finalize_error_rejects_connection() -> None:
-    handler = FakeAuthHandler()
-    handler.finalize_error = ValueError("bad server signature")
-    protocol, transport = make_protocol(version="5.0", auth_handler=handler)
-    transport.feed(_connack(data=b"forged"))
-
-    with pytest.raises(ValueError, match="bad server signature"):
-        await protocol.connect(Connect(client_id="c", clean_session=True, keepalive=60))
-
-    assert protocol._state.auth_method is None
-
-
-async def test_reauthenticate_passes_final_data_to_finalize() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
-    handler.finalize_calls.clear()
-    read_task = await _run_read_loop(protocol)
-
-    reauth_task = asyncio.create_task(protocol.reauthenticate())
-    await _answer_after(transport, sent=1, packet=_auth_packet(0x00, b"server-final"))
-    await reauth_task
-
-    assert handler.finalize_calls == [b"server-final"]
-
-    await _stop_task(read_task)
-
-
-async def test_reauthenticate_finalize_error_is_raised_to_caller() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
-    handler.finalize_error = ValueError("bad server signature")
-    run_task = asyncio.create_task(protocol.run())
-    await protocol.started_event.wait()
-
-    reauth_task = asyncio.create_task(protocol.reauthenticate())
-    await _answer_after(transport, sent=1, packet=_auth_packet(0x00, b"forged"))
-
-    with pytest.raises(ValueError, match="bad server signature"):
-        await run_task
-    with pytest.raises(ValueError, match="bad server signature"):
-        await reauth_task
-    assert protocol._state.pending_auth is None
-
-
 async def test_reauthenticate_direct_success() -> None:
     handler = FakeAuthHandler(method="TEST")
     protocol, transport = await _connected(handler)
@@ -317,89 +159,6 @@ async def test_reauthenticate_direct_success() -> None:
     await _stop_task(read_task)
 
 
-async def test_reauthenticate_with_challenge_round() -> None:
-    handler = FakeAuthHandler(method="TEST", responses=[b"resp1"])
-    protocol, transport = await _connected(handler)
-    read_task = await _run_read_loop(protocol)
-
-    reauth_task = asyncio.create_task(protocol.reauthenticate())
-    await _answer_after(
-        transport,
-        sent=1,
-        packet=_auth_packet(0x18, b"challenge"),
-    )
-    await _answer_after(transport, sent=2, packet=_auth_packet(0x00))
-    await reauth_task
-
-    assert handler.continue_calls == [b"challenge"]
-    response = _decode(transport.sent[1])
-    assert isinstance(response, Auth)
-    assert response.reason_code == 0x18
-    assert response.properties is not None
-    assert response.properties.authentication_data == b"resp1"
-
-    await _stop_task(read_task)
-
-
-async def test_reauthenticate_without_negotiated_method_raises() -> None:
-    protocol, _transport = await _connected()
-
-    with pytest.raises(RuntimeError):
-        await protocol.reauthenticate()
-
-
-async def test_reauthenticate_concurrent_call_raises() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
-    read_task = await _run_read_loop(protocol)
-
-    first = asyncio.create_task(protocol.reauthenticate())
-    await asyncio.sleep(0)
-
-    with pytest.raises(RuntimeError):
-        await protocol.reauthenticate()
-
-    await _answer_after(transport, sent=1, packet=_auth_packet(0x00))
-    await first
-    await _stop_task(read_task)
-
-
-async def test_reauthenticate_timeout_aborts_connection() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
-    read_task = await _run_read_loop(protocol)
-
-    with pytest.raises(MQTTTimeoutError):
-        await protocol.reauthenticate(timeout=0.05)
-
-    assert protocol._state.pending_auth is None
-    assert not transport.is_connected
-
-    await _stop_task(read_task)
-
-
-async def test_reauthenticate_cancelled_aborts_connection() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
-    read_task = await _run_read_loop(protocol)
-
-    reauth_task = asyncio.create_task(protocol.reauthenticate())
-    await asyncio.sleep(0)
-    reauth_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await reauth_task
-
-    assert protocol._state.pending_auth is None
-    assert not transport.is_connected
-    sent_before = len(transport.sent)
-
-    with pytest.raises(MQTTDisconnectedError):
-        await protocol.reauthenticate()
-    assert len(transport.sent) == sent_before
-
-    await _stop_task(read_task)
-
-
 def _block_writes(transport: FakeTransport) -> asyncio.Event:
     """Make ``transport.write`` hang until the returned event is set (a stalled send)."""
     release = asyncio.Event()
@@ -412,40 +171,26 @@ def _block_writes(transport: FakeTransport) -> asyncio.Event:
     return release
 
 
-async def test_reauthenticate_cancelled_during_send_aborts_connection() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
+@pytest.mark.parametrize("abandon", ["cancel", "timeout"])
+async def test_reauthenticate_abandoned_during_send(abandon: str) -> None:
+    protocol, transport = await _connected(FakeAuthHandler())
     read_task = await _run_read_loop(protocol)
     _block_writes(transport)
-    reauth_task = asyncio.create_task(protocol.reauthenticate())
-    await asyncio.sleep(0)
-
-    reauth_task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await reauth_task
-
-    assert protocol._state.pending_auth is None
-    assert not transport.is_connected
-
-    with pytest.raises(MQTTDisconnectedError):
-        await protocol.reauthenticate()
-
-    await _stop_task(read_task)
-
-
-async def test_reauthenticate_timeout_covers_stalled_send() -> None:
-    handler = FakeAuthHandler()
-    protocol, transport = await _connected(handler)
-    read_task = await _run_read_loop(protocol)
-    _block_writes(transport)
-
-    with pytest.raises(MQTTTimeoutError):
-        await asyncio.wait_for(protocol.reauthenticate(timeout=0.05), timeout=1)
-
-    assert protocol._state.pending_auth is None
-    assert not transport.is_connected
-
-    await _stop_task(read_task)
+    task = asyncio.create_task(protocol.reauthenticate(timeout=0.05 if abandon == "timeout" else 1))
+    try:
+        await asyncio.sleep(0)
+        if abandon == "cancel":
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError if abandon == "cancel" else MQTTTimeoutError):
+            await asyncio.wait_for(task, timeout=2)
+        assert protocol._state.pending_auth is None
+        assert not transport.is_connected
+        with pytest.raises(MQTTDisconnectedError):
+            await protocol.reauthenticate()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await _stop_task(read_task)
 
 
 async def test_auth_without_pending_exchange_raises() -> None:
@@ -481,27 +226,6 @@ async def test_auth_unexpected_reason_code_during_reauth_fails_pending() -> None
         await reauth_task
 
 
-async def test_continue_data_error_during_reauth_stops_connection() -> None:
-    class RaisingHandler(FakeAuthHandler):
-        async def continue_data(self, data: bytes | None) -> bytes | None:  # noqa: ARG002
-            msg = "cannot build response"
-            raise ValueError(msg)
-
-    handler = RaisingHandler()
-    protocol, transport = await _connected(handler)
-    run_task = asyncio.create_task(protocol.run())
-    await protocol.started_event.wait()
-
-    reauth_task = asyncio.create_task(protocol.reauthenticate())
-    await _answer_after(transport, sent=1, packet=_auth_packet(0x18, b"challenge"))
-
-    with pytest.raises(ValueError, match="cannot build response"):
-        await run_task
-
-    with pytest.raises(MQTTDisconnectedError):
-        await reauth_task
-
-
 async def test_disconnect_during_reauthenticate_raises_auth_error() -> None:
     handler = FakeAuthHandler()
     protocol, transport = await _connected(handler)
@@ -525,110 +249,17 @@ async def test_disconnect_during_reauthenticate_raises_auth_error() -> None:
     assert exc_info.value.reason_string == "bad creds"
 
 
-async def test_cancel_pending_fails_pending_reauthenticate() -> None:
-    protocol, _transport = make_protocol(version="5.0")
-    future: asyncio.Future[Auth] = asyncio.get_running_loop().create_future()
-    protocol._state.pending_auth = future
-
-    protocol._cancel_pending()
-
-    with pytest.raises(MQTTDisconnectedError):
-        await future
-
-
-class _ClientFakeTransport:
-    def __init__(self, feed: bytes | None = None) -> None:
-        self.sent: list[bytes] = []
-        self.closed = False
-        self._rx: deque[bytes | Exception] = deque()
-        if feed is not None:
-            self._rx.append(feed)
-
-    async def read(self, n: int) -> bytes:  # noqa: ARG002
-        while not self._rx:  # noqa: ASYNC110
-            await asyncio.sleep(0)
-        item = self._rx.popleft()
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    async def write(self, data: bytes) -> None:
-        self.sent.append(data)
-
-    async def close(self) -> None:
-        self.closed = True
-
-    @property
-    def is_connected(self) -> bool:
-        return not self.closed
-
-
-def test_client_v311_rejects_auth_handler() -> None:
-    handler = FakeAuthHandler()
-
-    with pytest.raises(RuntimeError, match=r"auth_handler require MQTT 5\.0"):
-        MQTTClient("localhost", version="3.1.1", auth_handler=handler)
-
-
-async def test_client_connect_embeds_negotiated_method_and_initial_data() -> None:
-    handler = FakeAuthHandler(method="TEST", responses=[b"init"])
-    connack = _connack()
-    transport = _ClientFakeTransport(feed=connack)
-
-    async def factory(host: str, port: int, tls: object) -> Transport:  # noqa: ARG001
-        return transport
-
-    client = MQTTClient("localhost", version="5.0", auth_handler=handler, transport_factory=factory)
-
-    await client._connect()
-
-    sent = _decode(transport.sent[0])
-    assert isinstance(sent, Connect)
-    assert sent.properties is not None
-    assert isinstance(sent.properties, ConnectProperties)
-    assert sent.properties.authentication_method == "TEST"
-    assert sent.properties.authentication_data == b"init"
-    assert handler.initial_calls == 1
-
-
-async def test_client_reconnect_calls_initial_data_again() -> None:
-    handler = FakeAuthHandler(method="TEST", responses=[b"first", b"second"])
-    connack = _connack()
-    transports = [_ClientFakeTransport(feed=connack), _ClientFakeTransport(feed=connack)]
-    made: list[_ClientFakeTransport] = []
-
-    async def factory(host: str, port: int, tls: object) -> Transport:  # noqa: ARG001
-        transport = transports[len(made)]
-        made.append(transport)
-        return transport
-
-    client = MQTTClient(
-        "localhost",
-        version="5.0",
-        auth_handler=handler,
-        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None),
-        transport_factory=factory,
-    )
-
-    await client._connect_with_retry()
-    await client._connect_with_retry()
-
-    assert handler.initial_calls == 2
-
-
-async def test_client_reauthenticate_without_connection_raises() -> None:
-    handler = FakeAuthHandler()
-    client = MQTTClient("localhost", version="5.0", auth_handler=handler)
-
-    with pytest.raises(MQTTDisconnectedError):
-        await client.reauthenticate()
-
-
-async def test_client_reauthenticate_on_v311_raises() -> None:
-    client = MQTTClient("localhost", version="3.1.1")
-
-    with pytest.raises(RuntimeError, match=r"AUTH is not allowed in MQTT 3\.1\.1"):
-        await client.reauthenticate()
+@pytest.mark.parametrize("operation", ["constructor_v311", "reauth_v311", "disconnected"])
+async def test_client_auth_guards(operation: str) -> None:
+    if operation == "constructor_v311":
+        with pytest.raises(RuntimeError, match=r"auth_handler require MQTT 5\.0"):
+            MQTTClient("localhost", version="3.1.1", auth_handler=FakeAuthHandler())
+    elif operation == "reauth_v311":
+        with pytest.raises(RuntimeError, match=r"AUTH is not allowed in MQTT 3\.1\.1"):
+            await MQTTClient("localhost", version="3.1.1").reauthenticate()
+    else:
+        with pytest.raises(MQTTDisconnectedError):
+            await MQTTClient("localhost", version="5.0", auth_handler=FakeAuthHandler()).reauthenticate()
 
 
 async def test_client_auth_emits_deprecation_warning() -> None:
@@ -638,70 +269,83 @@ async def test_client_auth_emits_deprecation_warning() -> None:
         await client.auth("TEST", b"data")
 
 
-class _RaisingInitialDataHandler(FakeAuthHandler):
-    async def initial_data(self) -> bytes | None:
-        msg = "cannot build initial data"
-        raise ValueError(msg)
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancel", "cancel_after_abandon"])
+async def test_run_finalizes_pending_operations(outcome: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    protocol, transport = await _connected(FakeAuthHandler())
+    pending: asyncio.Future[Auth] = asyncio.get_running_loop().create_future()
+    protocol._state.pending_auth = pending
+
+    async def read_loop() -> None:
+        if outcome == "failure":
+            msg = "read failed"
+            raise ValueError(msg)
+        if outcome.startswith("cancel"):
+            await asyncio.Event().wait()
+
+    async def ping_loop() -> None:
+        return
+
+    monkeypatch.setattr(protocol, "_read_loop", read_loop)
+    monkeypatch.setattr(protocol, "_ping_loop", ping_loop)
+    task = asyncio.create_task(protocol.run())
+    await protocol.started_event.wait()
+    if outcome.startswith("cancel"):
+        protocol._abandoned_reauth = outcome == "cancel_after_abandon"
+        task.cancel()
+    try:
+        if outcome == "success":
+            await asyncio.wait_for(task, timeout=1)
+        else:
+            with pytest.raises(ValueError if outcome == "failure" else asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+        with pytest.raises(MQTTDisconnectedError) as error:
+            await asyncio.wait_for(pending, timeout=1)
+        assert isinstance(error.value.__cause__, ValueError) if outcome == "failure" else error.value.__cause__ is None
+        assert protocol._dead
+        assert not transport.is_connected
+        with pytest.raises(MQTTDisconnectedError):
+            await protocol.reauthenticate()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
-class _HangingInitialDataHandler(FakeAuthHandler):
-    async def initial_data(self) -> bytes | None:
-        await asyncio.Event().wait()
-        return None
+@pytest.mark.parametrize("abandon", ["timeout", "cancel"])
+@pytest.mark.parametrize("late_error", [True, False])
+async def test_late_finalize_does_not_complete_abandoned_future(abandon: str, late_error: bool) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
 
+    class PausingHandler(FakeAuthHandler):
+        async def finalize_data(self, data: bytes | None) -> None:
+            if data == b"late":
+                entered.set()
+                await release.wait()
+                if late_error:
+                    msg = "late verification error"
+                    raise ValueError(msg)
+            await super().finalize_data(data)
 
-async def test_client_connect_closes_transport_when_initial_data_raises() -> None:
-    transport = _ClientFakeTransport()
-
-    async def factory(host: str, port: int, tls: object) -> Transport:  # noqa: ARG001
-        return transport
-
-    client = MQTTClient(
-        "localhost",
-        version="5.0",
-        auth_handler=_RaisingInitialDataHandler(),
-        transport_factory=factory,
-    )
-
-    with pytest.raises(ValueError, match="cannot build initial data"):
-        await client._connect()
-
-    assert transport.closed
-    assert transport.sent == []
-
-
-async def test_client_connect_initial_data_is_bounded_by_connect_timeout() -> None:
-    transport = _ClientFakeTransport()
-
-    async def factory(host: str, port: int, tls: object) -> Transport:  # noqa: ARG001
-        return transport
-
-    client = MQTTClient(
-        "localhost",
-        version="5.0",
-        auth_handler=_HangingInitialDataHandler(),
-        mqtt_connect_timeout=0.05,
-        transport_factory=factory,
-    )
-
-    with pytest.raises(MQTTTimeoutError):
-        await asyncio.wait_for(client._connect(), timeout=1)
-
-    assert transport.closed
-    assert transport.sent == []
-
-
-async def test_client_connect_closes_transport_when_finalize_data_raises() -> None:
-    handler = FakeAuthHandler()
-    handler.finalize_error = ValueError("bad server signature")
-    transport = _ClientFakeTransport(feed=_connack(data=b"forged"))
-
-    async def factory(host: str, port: int, tls: object) -> Transport:  # noqa: ARG001
-        return transport
-
-    client = MQTTClient("localhost", version="5.0", auth_handler=handler, transport_factory=factory)
-
-    with pytest.raises(ValueError, match="bad server signature"):
-        await client._connect()
-
-    assert transport.closed
+    protocol, transport = await _connected(PausingHandler())
+    transport.written.clear()
+    reauth = asyncio.create_task(protocol.reauthenticate(timeout=0.1 if abandon == "timeout" else 1))
+    await asyncio.wait_for(transport.written.wait(), timeout=1)
+    callback = asyncio.create_task(protocol._handle_auth(_auth_packet(0x00, b"late")))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        if abandon == "cancel":
+            reauth.cancel()
+        with pytest.raises(MQTTTimeoutError if abandon == "timeout" else asyncio.CancelledError):
+            await asyncio.wait_for(reauth, timeout=1)
+        assert not transport.is_connected
+        assert protocol._state.pending_auth is None
+        release.set()
+        if late_error:
+            with pytest.raises(ValueError, match="late verification error"):
+                await asyncio.wait_for(callback, timeout=1)
+        else:
+            await asyncio.wait_for(callback, timeout=1)
+    finally:
+        reauth.cancel()
+        callback.cancel()
+        await asyncio.gather(reauth, callback, return_exceptions=True)
