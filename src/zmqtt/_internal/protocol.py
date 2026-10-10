@@ -44,6 +44,7 @@ from zmqtt.errors import (
     MQTTProtocolError,
     MQTTPublishError,
     MQTTQoSExceededError,
+    MQTTRetainNotAvailableError,
     MQTTSubscribeError,
     MQTTTimeoutError,
 )
@@ -191,6 +192,7 @@ class MQTTProtocol:
         self._transport = transport
         self._state = state
         self._keepalive = keepalive
+        self._effective_keepalive = keepalive
         self._ping_timeout = ping_timeout
         self._connect_timeout = connect_timeout
         self._version: Final = version
@@ -209,10 +211,13 @@ class MQTTProtocol:
         self._disconnecting = False
         self._dead = False
         self._auth_handler: AuthHandler | None = auth_handler
+        self._death_cause: Exception | None = None
         # MQTT 5 §3.2.2.3.4: absent Maximum QoS means the server accepts QoS 2,
         # and 3.1.1 has no CONNACK properties at all — default to EXACTLY_ONCE
         # so publish() never has to branch on None.
         self._max_publish_qos: QoS = QoS.EXACTLY_ONCE
+        # MQTT 5 §3.2.2.3.5: absent Retain Available means retain is supported.
+        self._retain_available = True
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
@@ -264,12 +269,17 @@ class MQTTProtocol:
                         self._require_auth_method(pkt.properties)
                         await self._auth_handler.finalize_data(self._auth_data(pkt.properties))
                     log.info("Connected with session_present=%s", pkt.session_present)
+                    self._effective_keepalive = self._keepalive
                     if self._version == "5.0" and pkt.properties is not None:
+                        if pkt.properties.server_keep_alive is not None:
+                            self._effective_keepalive = pkt.properties.server_keep_alive
                         # Properties present but Maximum QoS absent: spec default is QoS 2.
                         max_qos = pkt.properties.maximum_qos
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
+                        self._retain_available = pkt.properties.retain_available is not False
                     else:  # 3.1.1 has no CONNACK properties: no limit.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
+                        self._retain_available = True
                     if self._auth_handler is not None:
                         # Re-authentication reuses the method negotiated in this CONNECT.
                         self._state.auth_method = self._auth_handler.method
@@ -293,15 +303,18 @@ class MQTTProtocol:
         self.started_event.set()
         try:
             await asyncio.gather(read_task, ping_task)
-        except BaseException:
+        except MQTTProtocolError as e:
+            log.error("Protocol error, closing connection: %s", e)  # noqa: TRY400
+            self._death_cause = e
+            raise
+        except Exception as e:
+            self._death_cause = e
+            raise
+        finally:
             read_task.cancel()
             ping_task.cancel()
             await asyncio.gather(read_task, ping_task, return_exceptions=True)
             raise
-        finally:
-            self.started_event.clear()
-            self._dead = True
-            self._cancel_pending()
 
     async def disconnect(self) -> None:
         """Send DISCONNECT and close the transport."""
@@ -314,6 +327,7 @@ class MQTTProtocol:
     def _cancel_pending(self) -> None:  # noqa: C901
         """Fail all futures awaiting broker responses — called when run() exits."""
         exc = MQTTDisconnectedError("Connection lost")
+        exc.__cause__ = self._death_cause
         for sub_f in self._state.pending_subs.values():
             if not sub_f.done():
                 sub_f.set_exception(exc)
@@ -344,7 +358,7 @@ class MQTTProtocol:
         """
         if self._dead:
             msg = "Connection lost"
-            raise MQTTDisconnectedError(msg)
+            raise MQTTDisconnectedError(msg) from self._death_cause
 
     async def publish(self, packet: Publish) -> PubAck | PubComp | None:
         """
@@ -354,6 +368,8 @@ class MQTTProtocol:
         max_qos = self._max_publish_qos
         if packet.qos > max_qos:
             raise MQTTQoSExceededError(requested=int(packet.qos), maximum=int(max_qos))
+        if packet.retain and not self._retain_available:
+            raise MQTTRetainNotAvailableError
         match packet.qos:
             case QoS.AT_MOST_ONCE:
                 await self._send(self._encode(packet))
@@ -689,8 +705,10 @@ class MQTTProtocol:
                 self._buf.feed(data)
 
     async def _ping_loop(self) -> None:
+        if self._effective_keepalive == 0:
+            return
         while True:
-            await asyncio.sleep(self._keepalive)
+            await asyncio.sleep(self._effective_keepalive)
             await self.ping(timeout=self._ping_timeout)
 
     async def _dispatch(self, packet: AnyPacket) -> None:  # noqa: C901

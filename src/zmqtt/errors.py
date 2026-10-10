@@ -34,6 +34,17 @@ class MQTTQoSExceededError(MQTTError):
         super().__init__(f"Requested QoS {requested} exceeds the server's Maximum QoS {maximum}")
 
 
+class MQTTRetainNotAvailableError(MQTTError):
+    """A retained PUBLISH was requested but the server does not support retained messages.
+
+    Raised locally, before the packet is sent, when CONNACK set Retain Available
+    to 0 (MQTT 5.0 §3.2.2.3.5). The connection stays open.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("The server does not support retained messages (Retain Available is 0)")
+
+
 class MQTTDisconnectedError(MQTTError):
     """Connection lost unexpectedly."""
 
