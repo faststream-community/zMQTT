@@ -86,6 +86,7 @@ addopts = "--strict-markers -n auto"
 log_cli_level = "DEBUG"
 markers = [
     "broker: requires a live MQTT broker (run with --broker or docker compose up artemis)",
+    "emqx_auth: requires the EMQX SCRAM listener",
 ]
 
 [tool.semantic_release]

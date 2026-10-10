@@ -21,7 +21,28 @@ uv run mkdocs build --strict
 uv build
 ```
 
-The broker integration tests expect the brokers from `docker/docker-compose.yaml`.
+The broker integration tests use the root `docker-compose.yaml`. Start all five
+brokers before pytest:
+
+```bash
+docker compose up --detach --wait artemis mosquitto hivemq nanomq emqx
+uv run pytest
+```
+
+To run only enhanced authentication tests:
+
+```bash
+uv run pytest -m emqx_auth -n 0
+uv run pytest -m emqx_auth
+```
+
+EMQX uses port 1888 for ordinary connections (authentication disabled on that
+listener) and port 1889 for SCRAM-SHA-256. The authenticator applies only to
+`tcp:scram`. Docker Compose configures the authenticator. An integration-test
+fixture checks the configuration and creates a separate user for each pytest
+worker, removing it at session teardown. It uses the disposable API key in
+`docker/emqx-api-keys.txt` on port 18083. These credentials are only for the
+local test broker.
 
 ## Pull requests
 
