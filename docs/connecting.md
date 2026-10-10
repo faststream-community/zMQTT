@@ -166,7 +166,7 @@ await client.disconnect()
 
 `create_client()` returns a `Protocol` view of the concrete `MQTTClient`. This means:
 
-- Mypy knows that `version="5.0"` clients have `auth()` and accept `PublishProperties`.
+- Mypy knows that `version="5.0"` clients have `auth()` (deprecated; prefer `auth_handler` + `reauthenticate()`) and accept `PublishProperties`.
 - Mypy knows that `version="3.1.1"` clients do not.
 - The underlying object is always `MQTTClient` — no two separate implementations.
 

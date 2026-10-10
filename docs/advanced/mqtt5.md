@@ -193,7 +193,64 @@ zmqtt manages the reply topic subscription, the `response_topic` /
 cancellation automatically. See [Request / Response](request-response.md)
 for the full API and responder example.
 
-## Low-level AUTH packet (`client.auth()`)
+## Enhanced authentication (`auth_handler`)
+
+Pass an `AuthHandler` to negotiate an authentication method in CONNECT and
+answer the broker's AUTH challenges automatically:
+
+```python
+class ScramHandler:
+    method = "SCRAM-SHA-256"
+
+    async def initial_data(self) -> bytes | None:
+        return b"client-first-message"
+
+    async def continue_data(self, data: bytes | None) -> bytes | None:
+        return b"client-final-message"
+
+    async def finalize_data(self, data: bytes | None) -> None:
+        if data != b"expected-server-signature":
+            raise ValueError("server signature mismatch")
+
+client = create_client("localhost", version="5.0", auth_handler=ScramHandler())
+```
+
+After connecting, `await client.reauthenticate()` starts re-authentication
+(AUTH with reason code `0x19`) and returns once the broker confirms it.
+`auth_handler` requires `version="5.0"`.
+
+If `reauthenticate()` is cancelled or times out, zmqtt closes the connection:
+the broker is not told the exchange was abandoned, and a late reply could be
+mistaken for the answer to the next exchange. With a `ReconnectConfig` the
+client reconnects (and runs the handler's `initial_data()` again); otherwise it
+stays disconnected.
+
+Handler lifecycle:
+
+- `initial_data()` is called for every CONNECT, including reconnects, and must
+  finish within `mqtt_connect_timeout`. It is **not** called by
+  `reauthenticate()`; pass the first re-authentication data as
+  `reauthenticate(data=...)`.
+- `continue_data()` is called for each AUTH challenge from the broker, both
+  during CONNECT and during re-authentication. It runs in the connection's read
+  loop, so a slow handler delays all incoming packets.
+- `finalize_data()` is called when the broker reports success: on the CONNACK
+  during CONNECT and on the final AUTH (`0x00`) of a re-authentication, with the
+  broker's final Authentication Data (or `None`). Verify the server's proof here
+  (for SCRAM) and raise to reject it. Authentication is not considered
+  successful until it returns; `reauthenticate()` re-raises the exception.
+- `method` must not change while the client is in use.
+- An exception raised by a handler method drops the connection.
+
+The broker's CONNACK and AUTH packets must carry the same authentication method
+as the one sent in CONNECT. If the method differs or is missing, zmqtt treats it
+as a protocol error (`MQTTProtocolError`) and drops the connection.
+
+## Low-level AUTH packet (`client.auth()`, deprecated)
+
+!!! warning "Deprecated"
+    `client.auth()` is deprecated and emits a `DeprecationWarning`. Pass an
+    `auth_handler` to the client and use `reauthenticate()` instead.
 
 Send one MQTT 5 AUTH packet with reason code `0x18` (Continue Authentication):
 
@@ -206,6 +263,11 @@ The `method` string is sent as `authentication_method`, and `data` as
 negotiate the method in CONNECT, wait for a broker AUTH response, or implement a
 multi-step mechanism such as SCRAM. Treat it as a low-level building block, not
 a complete enhanced-authentication flow.
+
+!!! note
+    The method must match the one negotiated in CONNECT (via `auth_handler`);
+    the spec forbids AUTH otherwise. To start re-authentication use
+    `reauthenticate()`, since `auth()` always sends `0x18`.
 
 ## CONNACK and DISCONNECT reason codes
 
