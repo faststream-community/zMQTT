@@ -47,7 +47,20 @@ services:
 
   emqx:
     image: emqx/emqx@sha256:0ba29902a8e552f7152754860b4b61b49a7e16fa376035bcf10021e944b2c0a0 # 6.2.2
+    environment:
+      EMQX_AUTHENTICATION: >-
+        [{mechanism = scram, backend = built_in_database, algorithm = sha256,
+          iteration_count = 4096, enable = true,
+          precondition = "str_eq(listener, 'tcp:scram')"}]
+      EMQX_API_KEY__BOOTSTRAP_FILE: /opt/emqx/etc/test-api-keys.txt
+      EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: "false"
+      EMQX_LISTENERS__TCP__SCRAM__ENABLE_AUTHN: "true"
+      EMQX_LISTENERS__TCP__SCRAM__BIND: "0.0.0.0:1884"
+    volumes:
+      - ./docker/emqx-api-keys.txt:/opt/emqx/etc/test-api-keys.txt:ro
     ports:
-      - 1888:1883
+      - "1888:1883"
+      - "1889:1884"
+      - "18083:18083"
     security_opt:
       - no-new-privileges:true

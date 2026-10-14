@@ -6,11 +6,13 @@ import dataclasses
 import logging
 import os
 import ssl
+import warnings
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal, Protocol, overload
 
 from zmqtt._internal._compat import Self, defer_cancellation, wait_for
+from zmqtt._internal.auth import AuthHandler
 from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.connect import ConnAck, Connect, Will
 from zmqtt._internal.packets.properties import (
@@ -37,6 +39,7 @@ from zmqtt._internal.types.topic import validate_publish, validate_response_topi
 from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTTimeoutError
 
 __all__ = (
+    "AuthHandler",
     "ConnectionInfo",
     "MQTTClient",
     "MQTTClientV5",
@@ -334,6 +337,8 @@ class MQTTClientV5(Protocol):
 
     async def ping(self, timeout: float = 10.0) -> float: ...
 
+    async def reauthenticate(self, data: bytes | None = None, *, timeout: float | None = None) -> None: ...
+
     async def request(
         self,
         topic: str,
@@ -561,6 +566,7 @@ class MQTTClient:
         client_id: str = "",
         keepalive: int = 60,
         clean_session: bool = True,
+        auth_handler: AuthHandler | None = None,
         username: str | None = None,
         password: str | None = None,
         will: Will | None = None,
@@ -674,6 +680,9 @@ class MQTTClient:
         if will is not None and will.properties is not None and version != "5.0":
             msg = "will properties require MQTT 5.0"
             raise RuntimeError(msg)
+        if auth_handler is not None and version != "5.0":
+            msg = "auth_handler require MQTT 5.0"
+            raise RuntimeError(msg)
         self._connect_properties = _build_connect_properties(
             version,
             session_expiry_interval=session_expiry_interval,
@@ -708,6 +717,7 @@ class MQTTClient:
         self._detached_filters: dict[str, SubscriptionEntry] = {}
         self._run_task: asyncio.Task[None] | None = None
         self._subscription_failure: asyncio.Future[BaseException] | None = None
+        self._auth_handler: AuthHandler | None = auth_handler
 
     @property
     def connection_info(self) -> ConnectionInfo:
@@ -851,6 +861,42 @@ class MQTTClient:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
         return await self._protocol.ping(timeout=timeout)
+
+    async def reauthenticate(self, data: bytes | None = None, *, timeout: float | None = None) -> None:
+        """Client-initiated re-authentication (MQTT 5.0 only).
+
+        Reuses the authentication method negotiated by ``auth_handler``
+        during CONNECT and drives the challenge/response exchange through it.
+
+        Args:
+            data: Authentication data for the initial AUTH (reason code 0x19)
+                sent to the broker; interpretation is method-specific.
+            timeout: Seconds to wait for the exchange to complete before
+                raising MQTTTimeoutError. ``None`` waits indefinitely.
+
+        Note:
+            If the call is cancelled or times out, the connection is closed,
+            because the broker cannot be told the exchange was abandoned.
+            With a ``ReconnectConfig`` the client reconnects; otherwise it
+            stays disconnected.
+
+        Raises:
+            RuntimeError: If the client is not using MQTT 5.0, or the
+                connection did not negotiate an authentication method at
+                CONNECT time (no ``auth_handler`` was configured).
+            MQTTDisconnectedError: If the client is not currently connected.
+            MQTTAuthError: If the broker rejects the re-authentication.
+            Exception: Whatever ``auth_handler.finalize_data()`` raises when it
+                rejects the broker's final data; the connection is dropped.
+            MQTTTimeoutError: If the exchange does not complete within timeout.
+        """
+        if self._version != "5.0":
+            msg = "AUTH is not allowed in MQTT 3.1.1"
+            raise RuntimeError(msg)
+        if self._protocol is None:
+            msg = "Not connected"
+            raise MQTTDisconnectedError(msg)
+        await self._protocol.reauthenticate(data=data, timeout=timeout)
 
     def subscribe(
         self,
@@ -1018,13 +1064,17 @@ class MQTTClient:
             RuntimeError: If the client is not using MQTT 5.0.
             MQTTDisconnectedError: If the client is not currently connected.
         """
+        warnings.warn(
+            "MQTTClient.auth() is deprecated: pass auth_handler to the client and use reauthenticate().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if self._version != "5.0":
             msg = "AUTH requires MQTT 5.0"
             raise RuntimeError(msg)
         if self._protocol is None:
             msg = "Not connected"
             raise MQTTDisconnectedError(msg)
-
         props = AuthProperties(authentication_method=method, authentication_data=data)
         await self._protocol.send_auth(Auth(reason_code=0x18, properties=props))
 
@@ -1043,17 +1093,32 @@ class MQTTClient:
             session_replay_timeout=self._session_replay_timeout,
             receive_maximum=connect_props.receive_maximum if connect_props is not None else None,
             maximum_packet_size=connect_props.maximum_packet_size if connect_props is not None else None,
-        )
-        connect_packet = Connect(
-            client_id=self._client_id,
-            clean_session=self._clean_session,
-            keepalive=self._keepalive,
-            username=self._username,
-            password=self._password.encode() if self._password is not None else None,
-            will=self._will,
-            properties=connect_props,
+            auth_handler=self._auth_handler,
         )
         try:
+            if self._auth_handler is not None and connect_props is not None:
+                try:
+                    initial_data = await wait_for(
+                        self._auth_handler.initial_data(),
+                        timeout=self._mqtt_connect_timeout,
+                    )
+                except asyncio.TimeoutError as e:
+                    msg = "AuthHandler.initial_data() did not complete within mqtt_connect_timeout"
+                    raise MQTTTimeoutError(msg) from e
+                connect_props = dataclasses.replace(
+                    connect_props,
+                    authentication_method=self._auth_handler.method,
+                    authentication_data=initial_data,
+                )
+            connect_packet = Connect(
+                client_id=self._client_id,
+                clean_session=self._clean_session,
+                keepalive=self._keepalive,
+                username=self._username,
+                password=self._password.encode() if self._password is not None else None,
+                will=self._will,
+                properties=connect_props,
+            )
             connack = await protocol.connect(connect_packet)
         except BaseException:
             await transport.close()
@@ -1197,6 +1262,7 @@ def create_client(
     host: str,
     port: int = ...,
     *,
+    auth_handler: AuthHandler | None = ...,
     client_id: str = ...,
     keepalive: int = ...,
     clean_session: bool = ...,
@@ -1225,6 +1291,7 @@ def create_client(
     host: str,
     port: int = 1883,
     *,
+    auth_handler: AuthHandler | None = None,
     client_id: str = "",
     keepalive: int = 60,
     clean_session: bool = True,
@@ -1257,6 +1324,7 @@ def create_client(
     return MQTTClient(
         host,
         port,
+        auth_handler=auth_handler,
         client_id=client_id,
         keepalive=keepalive,
         clean_session=clean_session,
