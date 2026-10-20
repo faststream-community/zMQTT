@@ -11,7 +11,8 @@ MQTTError
   ├── MQTTSubscribeError    # one or more filters rejected by the broker
   ├── MQTTPublishError      # QoS 1/2 publish rejected by the broker
   ├── MQTTRetainNotAvailableError # retained publish, but the broker has no retain support
-  └── MQTTInvalidTopicError # topic string failed MQTT validation
+  ├── MQTTInvalidTopicError # topic string failed MQTT validation
+  └── MQTTSubscriptionNotAvailableError # subscription needs a capability the server lacks
 ```
 
 All exceptions are importable from `zmqtt`:
@@ -24,6 +25,7 @@ from zmqtt import (
     MQTTDisconnectedError,
     MQTTTimeoutError,
     MQTTSubscribeError,
+    MQTTSubscriptionNotAvailableError,
     MQTTPublishError,
     MQTTInvalidTopicError,
 )
@@ -93,6 +95,44 @@ except MQTTSubscribeError as e:
 The same exception is raised by `await sub.start()` when using the manual subscription lifecycle.
 
 A rejected UNSUBSCRIBE is not an exception — see [Manual subscription lifecycle](subscribing.md#manual-subscription-lifecycle).
+
+### `MQTTSubscriptionNotAvailableError`
+
+Raised locally on a `version="5.0"` connection when a SUBSCRIBE needs a
+capability the broker reported as unavailable in CONNACK. Nothing is sent to
+the broker and the connection stays open (MQTT 5.0 §3.2.2.3.11–§3.2.2.3.13):
+
+| `capability` | CONNACK property equal to `0` | Rejected request |
+|---|---|---|
+| `"wildcard_subscription"` | Wildcard Subscription Available | filter contains `+` or `#` |
+| `"shared_subscription"` | Shared Subscription Available | filter starts with `$share/` |
+| `"subscription_identifier"` | Subscription Identifier Available | `subscription_identifier=` was passed |
+
+Absent properties — and MQTT 3.1.1, which has no CONNACK properties at all —
+mean the capability is available. `$queue/` and `$exclusive/` are broker
+extensions, not shared subscriptions, so they are not covered by this check.
+
+```python
+from zmqtt import MQTTSubscriptionNotAvailableError
+
+try:
+    async with client.subscribe("sensors/#") as sub:
+        ...
+except MQTTSubscriptionNotAvailableError as e:
+    print(e)  # The server does not support wildcard subscriptions (Wildcard Subscription Available is 0): 'sensors/#'
+    print(e.capability)  # "wildcard_subscription"
+    print(e.filters)  # ("sensors/#",)
+```
+
+The message names the CONNACK property and the offending filters. `capability`
+is one of the three strings above, `filters` holds the rejected topic filters
+(empty when the identifier is the cause), and `subscription_identifier` holds
+the identifier in that case.
+
+The exception is raised by `subscribe()`/`Subscription.start()` and also when an
+active subscription is restored after a reconnect, using the new connection's
+CONNACK. In the restore case the subscription is detached — its iterator raises
+`MQTTDisconnectedError` — and the remaining subscriptions are restored normally.
 
 ### `MQTTPublishError`
 

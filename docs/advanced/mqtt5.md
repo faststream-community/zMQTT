@@ -179,6 +179,38 @@ async with client.subscribe(
 
 The broker copies `subscription_identifier` into matching PUBLISH packets, where it is available as `msg.properties.subscription_identifier`. This is especially useful when separate subscriptions have overlapping filters.
 
+## Subscription availability (CONNACK)
+
+A 5.0 broker may advertise that it does not support some kinds of subscriptions:
+
+| CONNACK property | When `0` |
+|---|---|
+| Wildcard Subscription Available | Filters containing `+` or `#` are rejected |
+| Shared Subscription Available | Filters starting with `$share/<group>/` are rejected |
+| Subscription Identifier Available | SUBSCRIBE must not carry `subscription_identifier` |
+
+zmqtt checks these **before sending SUBSCRIBE** and raises
+[`MQTTSubscriptionNotAvailableError`](../error-handling.md#mqttsubscriptionnotavailableerror)
+locally — no packet leaves the client, and the connection stays usable. Absent
+properties (and MQTT 3.1.1, which has no CONNACK properties) mean the capability
+is available. `$queue/` and `$exclusive/` are broker-specific extensions, not
+shared subscriptions, so Shared Subscription Available does not apply to them.
+
+The check also runs when active subscriptions are restored after a reconnect,
+using the **new** connection's CONNACK: a subscription that is no longer
+supported is detached (its iterator raises `MQTTDisconnectedError`), while the
+remaining subscriptions are restored.
+
+```python
+from zmqtt import MQTTSubscriptionNotAvailableError
+
+try:
+    async with client.subscribe("sensors/#") as sub:
+        ...
+except MQTTSubscriptionNotAvailableError as e:
+    print(e)  # The server does not support wildcard subscriptions (Wildcard Subscription Available is 0): 'sensors/#'
+```
+
 ## Request / response (`client.request()`)
 
 Send a request and await exactly one reply in a single call:
