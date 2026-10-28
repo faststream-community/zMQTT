@@ -31,6 +31,7 @@ from zmqtt.errors import (
     MQTTQoSExceededError,
     MQTTRetainNotAvailableError,
     MQTTSubscribeError,
+    MQTTSubscriptionNotAvailableError,
     MQTTTimeoutError,
 )
 
@@ -51,6 +52,7 @@ __all__ = (
     "MQTTQoSExceededError",
     "MQTTRetainNotAvailableError",
     "MQTTSubscribeError",
+    "MQTTSubscriptionNotAvailableError",
     "MQTTTimeoutError",
     "Message",
     "PublishProperties",

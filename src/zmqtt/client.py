@@ -34,7 +34,12 @@ from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
 from zmqtt._internal.types.retain_handling import RetainHandling
 from zmqtt._internal.types.topic import validate_publish, validate_response_topic, validate_subscribe_topic
-from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTTimeoutError
+from zmqtt.errors import (
+    MQTTConnectError,
+    MQTTDisconnectedError,
+    MQTTSubscriptionNotAvailableError,
+    MQTTTimeoutError,
+)
 
 __all__ = (
     "ConnectionInfo",
@@ -390,7 +395,11 @@ class Subscription:
             msg = "A detached subscription cannot be restarted"
             raise RuntimeError(msg)
         self._client._subscriptions.append(self)
-        await self._do_subscribe(self._client._protocol)
+        try:
+            await self._do_subscribe(self._client._protocol)
+        except BaseException:
+            self._client._subscriptions.remove(self)
+            raise
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -1095,6 +1104,25 @@ class MQTTClient:
             else:
                 return
 
+    async def _restore_subscription(self, protocol: MQTTProtocol, sub: Subscription) -> None:
+        """Re-subscribe one subscription, detaching it if the new CONNACK forbids it."""
+        try:
+            await sub._reconnect(protocol)
+        except MQTTSubscriptionNotAvailableError:
+            log.exception("Cannot restore subscription %s; detaching it", sub._filters)
+            sub._registered_filters.clear()
+            sub._detach_local(protocol)
+
+    async def _restore_subscriptions(self, protocol: MQTTProtocol, subscriptions: list[Subscription]) -> None:
+        """Re-subscribe after a reconnect, detaching what the new CONNACK forbids.
+
+        A subscription the server no longer accepts must not take down the run
+        loop or block the others: it is detached (its consumer gets
+        :class:`MQTTDisconnectedError`) and the remaining ones are restored.
+        """
+        for sub in subscriptions:
+            await self._restore_subscription(protocol, sub)
+
     async def _run_loop(self) -> None:
         subs_to_restore: list[Subscription] = []
 
@@ -1109,8 +1137,7 @@ class MQTTClient:
                 # so this collapses to the original "await protocol.run()" pattern.
                 await self._protocol.started_event.wait()
                 if subs_to_restore:
-                    for sub in subs_to_restore:
-                        await sub._reconnect(self._protocol)
+                    await self._restore_subscriptions(self._protocol, subs_to_restore)
                     subs_to_restore = []
                 await self._request_dispatcher.restore()
                 await protocol_run_task

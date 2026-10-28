@@ -1,3 +1,5 @@
+from typing import Literal
+
 from zmqtt._internal.packets.properties import ConnAckProperties
 
 
@@ -90,3 +92,40 @@ class MQTTPublishError(MQTTError):
 
 class MQTTInvalidTopicError(MQTTError):
     """Topic string or topic filter failed MQTT validation."""
+
+
+SubscriptionCapability = Literal[
+    "wildcard_subscription",
+    "subscription_identifier",
+    "shared_subscription",
+]
+
+_CAPABILITY_DETAILS: dict[SubscriptionCapability, str] = {
+    "wildcard_subscription": "Wildcard Subscription Available",
+    "shared_subscription": "Shared Subscription Available",
+    "subscription_identifier": "Subscription Identifier Available",
+}
+
+
+class MQTTSubscriptionNotAvailableError(MQTTError):
+    """A SUBSCRIBE requested a capability the server advertised as unavailable.
+
+    Raised locally, before the packet is sent (MQTT 5.0 3.2.2.3.11-13).
+    """
+
+    def __init__(
+        self,
+        capability: SubscriptionCapability,
+        filters: tuple[str, ...] = (),
+        *,
+        subscription_identifier: int | None = None,
+    ) -> None:
+        self.capability = capability
+        self.filters = filters
+        self.subscription_identifier = subscription_identifier
+        description = _CAPABILITY_DETAILS[capability]
+        subject = ", ".join(repr(f) for f in filters)
+        if subscription_identifier is not None:
+            subject = str(subscription_identifier)
+        detail = f": {subject}" if subject else ""
+        super().__init__(f"The server does not support {capability} ({description} is 0){detail}")

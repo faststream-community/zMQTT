@@ -44,7 +44,9 @@ from zmqtt.errors import (
     MQTTQoSExceededError,
     MQTTRetainNotAvailableError,
     MQTTSubscribeError,
+    MQTTSubscriptionNotAvailableError,
     MQTTTimeoutError,
+    SubscriptionCapability,
 )
 
 log = logging.getLogger("zmqtt.protocol")
@@ -214,6 +216,11 @@ class MQTTProtocol:
         self._max_publish_qos: QoS = QoS.EXACTLY_ONCE
         # MQTT 5 §3.2.2.3.5: absent Retain Available means retain is supported.
         self._retain_available = True
+        # MQTT 5 3.2.2.3.11-13: absent Wildcard/Shared Subscription Available
+        # and Subscription Identifier Available flags mean the capability is supported.
+        self._wildcard_subscription_available = True
+        self._shared_subscription_available = True
+        self._subscription_identifier_available = True
         self.started_event = asyncio.Event()
 
     async def connect(self, packet: Connect) -> ConnAck:
@@ -247,15 +254,25 @@ class MQTTProtocol:
                     log.info("Connected with session_present=%s", pkt.session_present)
                     self._effective_keepalive = self._keepalive
                     if self._version == "5.0" and pkt.properties is not None:
+                        self._wildcard_subscription_available = (
+                            pkt.properties.wildcard_subscription_available is not False
+                        )
+                        self._shared_subscription_available = pkt.properties.shared_subscription_available is not False
+                        self._subscription_identifier_available = (
+                            pkt.properties.subscription_identifier_available is not False
+                        )
                         if pkt.properties.server_keep_alive is not None:
                             self._effective_keepalive = pkt.properties.server_keep_alive
                         # Properties present but Maximum QoS absent: spec default is QoS 2.
                         max_qos = pkt.properties.maximum_qos
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
                         self._retain_available = pkt.properties.retain_available is not False
-                    else:  # 3.1.1 has no CONNACK properties: no limit.
+                    else:  # 3.1.1 has no CONNACK properties; a 5.0 CONNACK may omit them.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
                         self._retain_available = True
+                        self._wildcard_subscription_available = True
+                        self._shared_subscription_available = True
+                        self._subscription_identifier_available = True
                     self.inbound.begin_session(session_present=pkt.session_present)
                     return pkt
 
@@ -536,6 +553,7 @@ class MQTTProtocol:
         subscription_identifier: int | None,
     ) -> SubAck:
         self._ensure_alive()
+        self._reject_unavailable_subscriptions(filters, subscription_identifier)
         loop = asyncio.get_running_loop()
         pid = self._state.packet_ids.acquire()
         future: asyncio.Future[SubAck] = loop.create_future()
@@ -758,3 +776,32 @@ class MQTTProtocol:
     async def _send(self, data: bytes) -> None:
         log.debug("Sending %d bytes", len(data))
         await self._transport.write(data)
+
+    def _reject_unavailable_subscriptions(
+        self,
+        filters: list[SubscriptionRequest],
+        subscription_identifier: int | None,
+    ) -> None:
+        """Reject locally what the broker said it cannot accept (MQTT 5 §3.2.2.3.11-13).
+
+        Checks run in a fixed order — shared, wildcard, subscription identifier —
+        so that ``$share/group/a/#`` is reported as shared, the more specific
+        reason, when both capabilities are unavailable. Nothing is sent on the
+        wire and the connection stays open.
+        """
+        if not self._shared_subscription_available:
+            shared = [req.topic_filter for req in filters if req.topic_filter.startswith("$share/")]
+            if shared:
+                capability: SubscriptionCapability = "shared_subscription"
+                raise MQTTSubscriptionNotAvailableError(capability, tuple(shared))
+        if not self._wildcard_subscription_available:
+            wildcard = [req.topic_filter for req in filters if "+" in req.topic_filter or "#" in req.topic_filter]
+            if wildcard:
+                capability = "wildcard_subscription"
+                raise MQTTSubscriptionNotAvailableError(capability, tuple(wildcard))
+        if not self._subscription_identifier_available and subscription_identifier is not None:
+            capability = "subscription_identifier"
+            raise MQTTSubscriptionNotAvailableError(
+                capability,
+                subscription_identifier=subscription_identifier,
+            )
