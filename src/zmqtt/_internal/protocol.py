@@ -170,6 +170,8 @@ class MQTTProtocol:
     QoS flows and subscription management are available between steps 1 and 3.
     """
 
+    _DEFAULT_SEND_QUOTA: Final = 65_535
+
     def __init__(
         self,
         transport: Transport,
@@ -186,6 +188,8 @@ class MQTTProtocol:
         receive_maximum: int | None = None,
         maximum_packet_size: int | None = None,
     ) -> None:
+        self._send_quota = asyncio.Semaphore(self._DEFAULT_SEND_QUOTA)
+        self._send_quota_waiters: set[asyncio.Task[object]] = set()
         self._transport = transport
         self._state = state
         self._keepalive = keepalive
@@ -246,6 +250,7 @@ class MQTTProtocol:
                         raise MQTTConnectError(pkt.return_code, properties=pkt.properties)
                     log.info("Connected with session_present=%s", pkt.session_present)
                     self._effective_keepalive = self._keepalive
+                    send_quota = self._DEFAULT_SEND_QUOTA
                     if self._version == "5.0" and pkt.properties is not None:
                         if pkt.properties.server_keep_alive is not None:
                             self._effective_keepalive = pkt.properties.server_keep_alive
@@ -253,9 +258,12 @@ class MQTTProtocol:
                         max_qos = pkt.properties.maximum_qos
                         self._max_publish_qos = QoS.EXACTLY_ONCE if max_qos is None else QoS(max_qos)
                         self._retain_available = pkt.properties.retain_available is not False
+                        if pkt.properties.receive_maximum is not None:
+                            send_quota = pkt.properties.receive_maximum
                     else:  # 3.1.1 has no CONNACK properties: no limit.
                         self._max_publish_qos = QoS.EXACTLY_ONCE
                         self._retain_available = True
+                    self._send_quota = asyncio.Semaphore(send_quota)
                     self.inbound.begin_session(session_present=pkt.session_present)
                     return pkt
 
@@ -320,6 +328,9 @@ class MQTTProtocol:
                 ping_f.set_exception(exc)
         self._ping_waiters.clear()
         self.inbound.clear()
+        for waiter in self._send_quota_waiters:
+            waiter.cancel()
+        self._send_quota_waiters.clear()
 
     def _ensure_alive(self) -> None:
         """Refuse new operations once the run loop has exited.
@@ -332,6 +343,27 @@ class MQTTProtocol:
         if self._dead:
             msg = "Connection lost"
             raise MQTTDisconnectedError(msg) from self._death_cause
+
+    async def _acquire_send_quota(self) -> None:
+        self._ensure_alive()
+        waiter = asyncio.current_task()
+        if waiter is None:
+            msg = "Cannot acquire send quota outside an asyncio task"
+            raise RuntimeError(msg)
+        self._send_quota_waiters.add(waiter)
+        try:
+            await self._send_quota.acquire()
+        except asyncio.CancelledError:
+            self._ensure_alive()
+            raise
+        finally:
+            self._send_quota_waiters.discard(waiter)
+
+        try:
+            self._ensure_alive()
+        except MQTTDisconnectedError:
+            self._send_quota.release()
+            raise
 
     async def publish(self, packet: Publish) -> PubAck | PubComp | None:
         """
@@ -350,34 +382,56 @@ class MQTTProtocol:
                 return None
 
             case QoS.AT_LEAST_ONCE:
-                loop = asyncio.get_running_loop()
-                pid = self._state.packet_ids.acquire()
-                packet = dataclasses.replace(packet, packet_id=pid)
-                future: asyncio.Future[PubAck] = loop.create_future()
-                self._state.inflight_qos1[pid] = QoS1Flight(
-                    packet_id=pid,
-                    publish=packet,
-                    future=future,
-                )
-                await self._send(self._encode(packet))
-                log.debug("Published QoS 1 to topic %r with packet_id=%d", packet.topic, pid)
+                await self._acquire_send_quota()
+                qos1_pid: int | None = None
+                try:
+                    loop = asyncio.get_running_loop()
+                    qos1_pid = self._state.packet_ids.acquire()
+                    packet = dataclasses.replace(packet, packet_id=qos1_pid)
+                    future: asyncio.Future[PubAck] = loop.create_future()
+                    self._state.inflight_qos1[qos1_pid] = QoS1Flight(
+                        packet_id=qos1_pid,
+                        publish=packet,
+                        future=future,
+                    )
+                    encode_result = self._encode(packet)
+                except Exception:
+                    if qos1_pid is not None:
+                        self._state.inflight_qos1.pop(qos1_pid, None)
+                        self._state.packet_ids.release(qos1_pid)
+                    self._send_quota.release()
+                    raise
+
+                await self._send(encode_result)
+                log.debug("Published QoS 1 to topic %r with packet_id=%d", packet.topic, qos1_pid)
                 ack = await future
                 _raise_on_rejected_puback(ack)
                 return ack
 
             case QoS.EXACTLY_ONCE:
-                loop = asyncio.get_running_loop()
-                pid = self._state.packet_ids.acquire()
-                packet = dataclasses.replace(packet, packet_id=pid)
-                future2: asyncio.Future[PubComp] = loop.create_future()
-                self._state.inflight_qos2_out[pid] = OutboundQoS2Flight(
-                    packet_id=pid,
-                    publish=packet,
-                    state=OutboundQoS2State.PENDING_PUBREC,
-                    future=future2,
-                )
-                await self._send(self._encode(packet))
-                log.debug("Published QoS 2 to topic %r with packet_id=%d", packet.topic, pid)
+                await self._acquire_send_quota()
+                qos2_pid: int | None = None
+                try:
+                    loop = asyncio.get_running_loop()
+                    qos2_pid = self._state.packet_ids.acquire()
+                    packet = dataclasses.replace(packet, packet_id=qos2_pid)
+                    future2: asyncio.Future[PubComp] = loop.create_future()
+                    self._state.inflight_qos2_out[qos2_pid] = OutboundQoS2Flight(
+                        packet_id=qos2_pid,
+                        publish=packet,
+                        state=OutboundQoS2State.PENDING_PUBREC,
+                        future=future2,
+                    )
+                    encode_result = self._encode(packet)
+                except Exception:
+                    if qos2_pid is not None:
+                        self._state.inflight_qos2_out.pop(qos2_pid, None)
+                        self._state.packet_ids.release(qos2_pid)
+                    self._send_quota.release()
+                    raise
+
+                await self._send(encode_result)
+                log.debug("Published QoS 2 to topic %r with packet_id=%d", packet.topic, qos2_pid)
                 return await future2
 
     async def subscribe(
@@ -675,6 +729,7 @@ class MQTTProtocol:
             msg = f"PUBACK for unknown packet_id {packet.packet_id}"
             raise MQTTProtocolError(msg)
         self._state.packet_ids.release(packet.packet_id)
+        self._send_quota.release()
         if not flight.future.done():
             flight.future.set_result(packet)
         log.debug("QoS 1 ack received for packet_id=%d", packet.packet_id)
@@ -696,6 +751,7 @@ class MQTTProtocol:
             self._state.inflight_qos2_out.pop(packet.packet_id, None)
             self._state.packet_ids.release(packet.packet_id)
             err = _publish_error(packet)
+            self._send_quota.release()
             if not flight.future.done():
                 flight.future.set_exception(err)
             log.debug("QoS 2 ack received with error for packet_id=%d: %s", packet.packet_id, err)
@@ -711,6 +767,7 @@ class MQTTProtocol:
             msg = f"PUBCOMP for unknown packet_id {packet.packet_id}"
             raise MQTTProtocolError(msg)
         self._state.packet_ids.release(packet.packet_id)
+        self._send_quota.release()
         if not flight.future.done():
             flight.future.set_result(packet)
         log.debug("QoS 2 complete for packet_id=%d", packet.packet_id)
