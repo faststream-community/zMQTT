@@ -9,6 +9,7 @@ import pytest
 
 from zmqtt import (
     MQTTClient,
+    MQTTConnectError,
     MQTTDisconnectedError,
     MQTTTimeoutError,
     QoS,
@@ -24,6 +25,7 @@ from zmqtt._internal.packets.publish import Publish
 from zmqtt._internal.packets.types import PacketType
 from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.transport.base import Transport
+from zmqtt.client import TransportFactory
 
 
 def test_mqtt_connect_timeout_default_is_30s() -> None:
@@ -154,6 +156,133 @@ async def test_mqtt_connect_timeout_gives_up_after_max_attempts() -> None:
 
     assert len(made) == 1  # gave up after the single allowed attempt
     assert made[0].closed  # transport still cleaned up on give-up
+
+
+def _refusing_factory(
+    return_codes: list[int], version: Literal["3.1.1", "5.0"]
+) -> tuple[list[FakeTransport], TransportFactory]:
+    """Answer each connection attempt with the next CONNACK return code."""
+    made: list[FakeTransport] = []
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        code = return_codes[len(made)]
+        transport = FakeTransport(feed=encode(ConnAck(session_present=False, return_code=code), version=version))
+        made.append(transport)
+        return transport
+
+    return made, factory
+
+
+@pytest.mark.parametrize(
+    ("version", "code"),
+    [
+        ("3.1.1", 0x03),  # Server unavailable
+        ("5.0", 0x88),  # Server unavailable
+        ("5.0", 0x89),  # Server busy
+        ("5.0", 0x97),  # Quota exceeded
+        ("5.0", 0x9F),  # Connection rate exceeded
+    ],
+)
+async def test_connect_retries_transient_connack_refusal(version: Literal["3.1.1", "5.0"], code: int) -> None:
+    made, factory = _refusing_factory([code, code, 0], version)
+    client = MQTTClient(
+        "localhost",
+        version=version,
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None),
+        transport_factory=factory,
+    )
+
+    await client._connect_with_retry()
+
+    assert len(made) == 3
+    assert made[0].closed
+    assert made[1].closed
+    assert client._protocol is not None
+
+
+async def test_transient_connack_refusal_gives_up_after_max_attempts() -> None:
+    made, factory = _refusing_factory([0x03, 0x03, 0], "3.1.1")
+    client = MQTTClient(
+        "localhost",
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=2),
+        transport_factory=factory,
+    )
+
+    with pytest.raises(MQTTConnectError) as exc_info:
+        await client._connect_with_retry()
+
+    assert exc_info.value.return_code == 0x03
+    assert len(made) == 2
+
+
+@pytest.mark.parametrize(
+    ("version", "code"),
+    [
+        ("3.1.1", 0x04),  # Bad user name or password
+        ("3.1.1", 0x05),  # Not authorized
+        ("5.0", 0x86),  # Bad User Name or Password
+        ("5.0", 0x87),  # Not authorized
+    ],
+)
+async def test_connect_does_not_retry_permanent_connack_refusal(version: Literal["3.1.1", "5.0"], code: int) -> None:
+    made, factory = _refusing_factory([code, 0], version)
+    client = MQTTClient(
+        "localhost",
+        version=version,
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None),
+        transport_factory=factory,
+    )
+
+    with pytest.raises(MQTTConnectError) as exc_info:
+        await client._connect_with_retry()
+
+    assert exc_info.value.return_code == code
+    assert len(made) == 1
+
+
+@pytest.mark.parametrize(("code", "transient"), [(0x03, True), (0x88, True), (0x04, False), (0x87, False)])
+def test_connect_error_is_transient(code: int, *, transient: bool) -> None:
+    assert MQTTConnectError(code).is_transient is transient
+
+
+async def test_run_loop_keeps_reconnecting_through_transient_connack_refusal() -> None:
+    # A broker that is still booting (e.g. RabbitMQ) refuses with "server
+    # unavailable"; that must not end the reconnect task.
+    def connack(code: int) -> bytes:
+        return encode(ConnAck(session_present=False, return_code=code), version="3.1.1")
+
+    first = FakeTransport(feed=connack(0))
+    refused = FakeTransport(feed=connack(0x03))
+    retry = FakeTransport(feed=connack(0))
+    made: list[FakeTransport] = []
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        transport = (first, refused, retry)[len(made)]
+        made.append(transport)
+        return transport
+
+    client = MQTTClient(
+        "localhost",
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None),
+        transport_factory=factory,
+    )
+
+    async with client:
+        first._rx.append(OSError("connection reset"))
+
+        async def reconnected() -> None:
+            while True:
+                await asyncio.sleep(0)
+                info = client._connection_info
+                if info is not None and info.connection_id == 2:
+                    return
+
+        await asyncio.wait_for(reconnected(), timeout=2)
+
+        assert client._run_task is not None
+        assert not client._run_task.done()
+        assert made == [first, refused, retry]
+        assert refused.closed
 
 
 async def test_run_loop_reconnects_after_transport_oserror() -> None:
