@@ -5,6 +5,22 @@ class MQTTError(Exception):
     """Base class for all zmqtt exceptions."""
 
 
+# CONNACK codes for a refusal the broker may lift on its own, such as while it
+# boots or sheds load. MQTT 3.1.1 codes are below 0x80 and MQTT 5 codes are
+# 0x80 and above, so one set covers both versions. 0x9C (Use another server)
+# and 0x9D (Server moved) are left out: MQTT 5 section 4.11 says to switch
+# server rather than retry the same one.
+_TRANSIENT_CONNACK_CODES = frozenset(
+    {
+        0x03,  # MQTT 3.1.1: Server unavailable
+        0x88,  # MQTT 5: Server unavailable
+        0x89,  # MQTT 5: Server busy
+        0x97,  # MQTT 5: Quota exceeded
+        0x9F,  # MQTT 5: Connection rate exceeded
+    },
+)
+
+
 class MQTTConnectError(MQTTError):
     """CONNACK returned a non-zero return code."""
 
@@ -15,6 +31,15 @@ class MQTTConnectError(MQTTError):
         self.user_properties = properties.user_properties if properties is not None else ()
         self.server_reference = properties.server_reference if properties is not None else None
         super().__init__(f"Connection refused: return code {return_code}")
+
+    @property
+    def is_transient(self) -> bool:
+        """Whether the broker may accept a later attempt without a config change.
+
+        True for "server unavailable", "server busy", "quota exceeded" and
+        "connection rate exceeded"; false for refusals such as bad credentials.
+        """
+        return self.return_code in _TRANSIENT_CONNACK_CODES
 
 
 class MQTTProtocolError(MQTTError):

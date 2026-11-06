@@ -4,7 +4,7 @@
 
 Reconnection is enabled by default and applies to both the **initial connection** and any subsequent connection loss. When a network-level error (`OSError`) occurs, including during an established connection after an RST, route change, or VPN transition, the client waits and retries with exponential back-off. When a running connection drops (`MQTTDisconnectedError` or `MQTTTimeoutError`), it reconnects and re-subscribes automatically. Your `async for msg in sub` loop keeps waiting and resumes delivering messages once the connection is restored.
 
-A broker refusal (`MQTTConnectError`, e.g. wrong credentials) is never retried — it propagates immediately regardless of `ReconnectConfig`.
+A broker refusal (`MQTTConnectError`) is retried like a network error only when it is transient: "server unavailable" (3.1.1 code 3, MQTT 5 `0x88`), "server busy" (`0x89`), "quota exceeded" (`0x97`) and "connection rate exceeded" (`0x9F`). A broker that is still starting up, or shedding load, sends these. These attempts count towards `max_attempts`. Any other refusal, such as bad credentials or not authorised, propagates immediately. `MQTTConnectError.is_transient` tells the two apart. To change which refusals are retried, see [Retrying other refusals](#retrying-other-refusals).
 
 Your application code does not need to handle reconnection at all in the common case.
 
@@ -29,10 +29,39 @@ config = ReconnectConfig(
 | `max_delay` | `60.0` | Maximum delay between attempts |
 | `backoff_factor` | `2.0` | Each failure multiplies the delay by this factor |
 | `max_attempts` | `5` | Total connection attempts before giving up. `None` retries indefinitely |
+| `retry_refusal` | `None` | Decides per refused CONNACK whether to retry it. `None` retries only transient refusals |
 
 With the default limit of five total attempts, failed attempts are separated by
 delays of 1 s, 2 s, 4 s, and 8 s. With `max_attempts=None`, retries continue and
 the delay eventually caps at 60 s.
+
+## Retrying other refusals
+
+`retry_refusal` replaces the default decision for every refused CONNACK. It
+receives the `MQTTConnectError` and returns `True` to retry. Retries still use
+the back-off and count towards `max_attempts`.
+
+Some brokers refuse with "not authorised" while they start up. RabbitMQ, for
+example, sends it while a vhost is starting or before a user's permissions are
+applied. To retry that as well:
+
+```python
+from zmqtt import MQTTConnectError, ReconnectConfig
+
+NOT_AUTHORIZED = {0x05, 0x87}  # MQTT 3.1.1 and MQTT 5
+
+
+def retry_refusal(refusal: MQTTConnectError) -> bool:
+    return refusal.is_transient or refusal.return_code in NOT_AUTHORIZED
+
+
+config = ReconnectConfig(max_attempts=None, retry_refusal=retry_refusal)
+```
+
+The MQTT 3.1.1 and MQTT 5 code spaces differ (3.1.1 code 5 is MQTT 5 `0x87`),
+so check both when the client may use either version. Retrying a refusal the
+broker will never lift, such as bad credentials, only delays the error; brokers
+may also treat repeated attempts as abuse (MQTT 5 section 5.4.8).
 
 ## Passing config to `create_client()`
 

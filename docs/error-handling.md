@@ -75,6 +75,11 @@ Common return codes (MQTT 3.1.1):
 | 4 | Bad username or password |
 | 5 | Not authorised |
 
+`e.is_transient` is `True` for refusals the broker may lift on its own (3.1.1
+code 3; MQTT 5 `0x88`, `0x89`, `0x97`, `0x9F`). The client retries those under
+`ReconnectConfig` before raising; `ReconnectConfig.retry_refusal` changes which
+refusals are retried. See [Reconnection](advanced/reconnection.md).
+
 ### `MQTTSubscribeError`
 
 Raised when the broker rejects one or more topic filters in its SUBACK response. This commonly indicates an authorization failure. The `failures` attribute maps each rejected filter to its numeric reason code:
