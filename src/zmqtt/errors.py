@@ -7,7 +7,9 @@ class MQTTError(Exception):
 
 # CONNACK codes for a refusal the broker may lift on its own, such as while it
 # boots or sheds load. MQTT 3.1.1 codes are below 0x80 and MQTT 5 codes are
-# 0x80 and above, so one set covers both versions.
+# 0x80 and above, so one set covers both versions. 0x9C (Use another server)
+# and 0x9D (Server moved) are left out: MQTT 5 section 4.11 says to switch
+# server rather than retry the same one.
 _TRANSIENT_CONNACK_CODES = frozenset(
     {
         0x03,  # MQTT 3.1.1: Server unavailable

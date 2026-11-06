@@ -222,6 +222,8 @@ async def test_transient_connack_refusal_gives_up_after_max_attempts() -> None:
         ("3.1.1", 0x05),  # Not authorized
         ("5.0", 0x86),  # Bad User Name or Password
         ("5.0", 0x87),  # Not authorized
+        ("5.0", 0x9C),  # Use another server
+        ("5.0", 0x9D),  # Server moved
     ],
 )
 async def test_connect_does_not_retry_permanent_connack_refusal(version: Literal["3.1.1", "5.0"], code: int) -> None:
@@ -237,6 +239,62 @@ async def test_connect_does_not_retry_permanent_connack_refusal(version: Literal
         await client._connect_with_retry()
 
     assert exc_info.value.return_code == code
+    assert len(made) == 1
+
+
+@pytest.mark.parametrize(("version", "code"), [("3.1.1", 0x05), ("5.0", 0x87)])
+async def test_retry_refusal_hook_retries_not_authorized(version: Literal["3.1.1", "5.0"], code: int) -> None:
+    # RabbitMQ refuses with "not authorized" while a vhost starts or before
+    # the user's permissions are applied.
+    made, factory = _refusing_factory([code, code, 0], version)
+    seen: list[int] = []
+
+    def retry_refusal(refusal: MQTTConnectError) -> bool:
+        seen.append(refusal.return_code)
+        return refusal.is_transient or refusal.return_code in {0x05, 0x87}
+
+    client = MQTTClient(
+        "localhost",
+        version=version,
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None, retry_refusal=retry_refusal),
+        transport_factory=factory,
+    )
+
+    await client._connect_with_retry()
+
+    assert seen == [code, code]
+    assert len(made) == 3
+    assert client._protocol is not None
+
+
+async def test_retry_refusal_hook_is_bounded_by_max_attempts() -> None:
+    made, factory = _refusing_factory([0x87, 0x87, 0], "5.0")
+    client = MQTTClient(
+        "localhost",
+        version="5.0",
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=2, retry_refusal=lambda _: True),
+        transport_factory=factory,
+    )
+
+    with pytest.raises(MQTTConnectError):
+        await client._connect_with_retry()
+
+    assert len(made) == 2
+
+
+async def test_retry_refusal_hook_vetoes_transient_refusal() -> None:
+    made, factory = _refusing_factory([0x88, 0], "5.0")
+    client = MQTTClient(
+        "localhost",
+        version="5.0",
+        reconnect=ReconnectConfig(initial_delay=0.0, max_attempts=None, retry_refusal=lambda _: False),
+        transport_factory=factory,
+    )
+
+    with pytest.raises(MQTTConnectError) as exc_info:
+        await client._connect_with_retry()
+
+    assert exc_info.value.return_code == 0x88
     assert len(made) == 1
 
 

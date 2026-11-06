@@ -251,7 +251,8 @@ client = create_client(
 ```
 
 Transient broker refusals ("server unavailable", "server busy") are retried;
-permanent ones such as invalid credentials are not. See
+permanent ones such as invalid credentials are not, unless
+`ReconnectConfig.retry_refusal` says otherwise. See
 [Reconnection](https://faststream-community.github.io/zMQTT/advanced/reconnection/)
 for the complete failure semantics.
 

@@ -77,7 +77,8 @@ Common return codes (MQTT 3.1.1):
 
 `e.is_transient` is `True` for refusals the broker may lift on its own (3.1.1
 code 3; MQTT 5 `0x88`, `0x89`, `0x97`, `0x9F`). The client retries those under
-`ReconnectConfig` before raising; see [Reconnection](advanced/reconnection.md).
+`ReconnectConfig` before raising; `ReconnectConfig.retry_refusal` changes which
+refusals are retried. See [Reconnection](advanced/reconnection.md).
 
 ### `MQTTSubscribeError`
 

@@ -242,6 +242,10 @@ class ReconnectConfig:
         backoff_factor: Multiplier applied to the delay after each failed attempt.
         max_attempts: Maximum total number of connection attempts before
             giving up. ``None`` retries indefinitely.
+        retry_refusal: Decides per refused CONNACK whether to retry it.
+            ``None`` retries only transient refusals
+            (:attr:`MQTTConnectError.is_transient`). Retries count towards
+            *max_attempts*.
     """
 
     enabled: bool = True
@@ -249,6 +253,7 @@ class ReconnectConfig:
     max_delay: float = 60.0
     backoff_factor: float = 2.0
     max_attempts: int | None = 5
+    retry_refusal: Callable[[MQTTConnectError], bool] | None = None
 
 
 async def _default_transport_factory(
@@ -1083,7 +1088,7 @@ class MQTTClient:
             try:
                 await self._connect()
             except (OSError, MQTTTimeoutError, MQTTConnectError) as e:  # noqa: PERF203
-                if isinstance(e, MQTTConnectError) and not e.is_transient:
+                if isinstance(e, MQTTConnectError) and not self._retries_refusal(e):
                     raise
                 attempt += 1
                 max_a = self._reconnect.max_attempts
@@ -1094,6 +1099,12 @@ class MQTTClient:
                 delay = min(delay * self._reconnect.backoff_factor, self._reconnect.max_delay)
             else:
                 return
+
+    def _retries_refusal(self, refusal: MQTTConnectError) -> bool:
+        retry_refusal = self._reconnect.retry_refusal
+        if retry_refusal is None:
+            return refusal.is_transient
+        return retry_refusal(refusal)
 
     async def _run_loop(self) -> None:
         subs_to_restore: list[Subscription] = []
