@@ -2,6 +2,37 @@
 
 <!-- version list -->
 
+## v0.2.6 (2026-11-11)
+
+### Bug Fixes
+
+- **client**: Retry transient CONNACK refusals; add ReconnectConfig.retry_refusal
+  ([#129](https://github.com/faststream-community/zMQTT/pull/129),
+  [`52485a2`](https://github.com/faststream-community/zMQTT/commit/52485a2757ed248f88aa7d453f291f65c5ae16ee))
+
+- **protocol**: Honor server receive maximum
+  ([#123](https://github.com/faststream-community/zMQTT/pull/123),
+  [`c43cdd4`](https://github.com/faststream-community/zMQTT/commit/c43cdd470c3495c5169f845a262089bd7ac46ec3))
+
+### Chores
+
+- **dependencies**: Bump dev dependencies
+  ([#120](https://github.com/faststream-community/zMQTT/pull/120),
+  [`69b67e2`](https://github.com/faststream-community/zMQTT/commit/69b67e2869fac9808f82f5986252df7966ccc003))
+
+- **justfile**: Add justfile ([#122](https://github.com/faststream-community/zMQTT/pull/122),
+  [`2b42db2`](https://github.com/faststream-community/zMQTT/commit/2b42db2d3407b3f29eba672a6413c2406266ceb7))
+
+### Continuous Integration
+
+- Auto-merge Dependabot PRs ([#127](https://github.com/faststream-community/zMQTT/pull/127),
+  [`3176890`](https://github.com/faststream-community/zMQTT/commit/31768905d6af6564d3c632b8a61e3f1e71371120))
+
+- **deps**: Bump the github-actions group with 3 updates
+  ([#121](https://github.com/faststream-community/zMQTT/pull/121),
+  [`4dcb567`](https://github.com/faststream-community/zMQTT/commit/4dcb567af028b5283e039dc35c86a59c246ece77))
+
+
 ## v0.2.5 (2026-10-07)
 
 ### Bug Fixes
