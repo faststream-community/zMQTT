@@ -812,3 +812,15 @@ async def test_pending_futures_chain_the_error_that_killed_the_connection() -> N
 
     with pytest.raises(MQTTProtocolError):
         await run_task
+
+
+async def test_ping_after_connection_lost_raises_without_sending() -> None:
+    # While the client reconnects, a ping must not write to the dead transport.
+    protocol, transport = make_protocol()
+    transport._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.run()
+
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.ping(timeout=0.1)
+    assert transport.sent == []

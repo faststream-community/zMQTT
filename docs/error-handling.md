@@ -142,6 +142,8 @@ reconnecting.
 
 Raised when an operation cannot continue because the connection was lost. If reconnection is enabled (the default), transient connection failures are normally handled automatically.
 
+While the client is reconnecting, `publish()` and `ping()` raise it at once without writing to the lost connection. A health check that calls `ping()` can treat it as "not connected".
+
 If reconnection is disabled (`ReconnectConfig(enabled=False)`), an in-progress or subsequent `publish()`, `ping()`, or subscription start may raise `MQTTDisconnectedError`. The exception is not injected asynchronously into unrelated application code.
 
 ### `MQTTTimeoutError`
