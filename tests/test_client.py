@@ -161,9 +161,47 @@ async def test_retried_connect_failure_is_logged_on_one_line(
     [record] = [r for r in caplog.records if r.name == "zmqtt.client"]
     assert record.levelno == logging.WARNING
     assert record.getMessage() == (
-        "Connection failed, retrying in 0.0s: ConnectionRefusedError: [Errno 61] Connect call failed"
+        "Connection to localhost:1883 failed, retrying in 0.0s: ConnectionRefusedError: [Errno 61] Connect call failed"
     )
     assert bool(record.exc_info) is traceback
+
+
+async def test_log_records_name_the_client(caplog: pytest.LogCaptureFixture) -> None:
+    connack = encode(ConnAck(session_present=False, return_code=0), version="3.1.1")
+    first = FakeTransport(feed=connack)
+    retry = FakeTransport(feed=connack)
+    made: list[FakeTransport] = []
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        made.append(first)
+        if len(made) == 2:
+            raise ConnectionRefusedError(61, "Connect call failed")
+        return first if len(made) == 1 else retry
+
+    client = MQTTClient(
+        "broker.example",
+        1884,
+        client_id="sensor-1",
+        reconnect=ReconnectConfig(initial_delay=0.0),
+        transport_factory=factory,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="zmqtt"):
+        async with client:
+            first._rx.append(OSError("connection reset"))
+            while client._connection_info is None or client._connection_info.connection_id != 2:  # noqa: ASYNC110
+                await asyncio.sleep(0)
+
+    assert [r.getMessage() for r in caplog.records if r.name == "zmqtt.client"] == [
+        "Connection to broker.example:1884 (client_id 'sensor-1') lost, reconnecting...",
+        "Connection to broker.example:1884 (client_id 'sensor-1') failed, retrying in 0.0s: "
+        "ConnectionRefusedError: [Errno 61] Connect call failed",
+        "Successfully reconnected to broker.example:1884 (client_id 'sensor-1')",
+    ]
+    assert {r.name for r in caplog.records} == {"zmqtt.client", "zmqtt.protocol"}
+    assert {(vars(r)["mqtt_broker"], vars(r)["mqtt_client_id"]) for r in caplog.records} == {
+        ("broker.example:1884", "sensor-1")
+    }
 
 
 async def test_mqtt_connect_timeout_gives_up_after_max_attempts() -> None:
