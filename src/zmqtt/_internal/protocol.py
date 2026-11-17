@@ -656,6 +656,7 @@ class MQTTProtocol:
             raise RuntimeError(
                 msg,
             )
+        self._ensure_alive()
         await self._send(self._encode(packet))
         log.debug("Sent AUTH with reason_code=%d", packet.reason_code)
 
