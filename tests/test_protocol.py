@@ -273,6 +273,20 @@ async def test_deliver_no_match_logs_warning(caplog: pytest.LogCaptureFixture) -
     assert "unknown/topic" in caplog.text
 
 
+async def test_inbound_log_records_carry_log_extra(caplog: pytest.LogCaptureFixture) -> None:
+    protocol = MQTTProtocol(FakeTransport(), SessionState(), log_extra={"mqtt_broker": "broker.example:1883"})
+
+    with caplog.at_level(logging.WARNING, logger="zmqtt.protocol"):
+        await protocol._handle_publish(
+            Publish(topic="unknown/topic", payload=b"x", qos=QoS.AT_MOST_ONCE, retain=False, dup=False),
+        )
+
+    [record] = caplog.records
+    assert record.name == "zmqtt.protocol"
+    assert record.getMessage() == "No subscriber for topic 'unknown/topic'"
+    assert vars(record)["mqtt_broker"] == "broker.example:1883"
+
+
 async def test_stripped_prefix_filter_receives_messages() -> None:
     """A group-less decorator ($queue, $exclusive, ...) is stripped for matching.
 

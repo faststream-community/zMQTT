@@ -412,7 +412,9 @@ class Subscription:
         try:
             sent = await protocol.unsubscribe(self._registered_filters)
         except Exception:  # noqa: BLE001 - filters are already released locally, so nothing is left to retry
-            log.warning("Unsubscribe of %s failed; stopped locally", self._registered_filters, exc_info=True)
+            self._client._log.warning(
+                "Unsubscribe of %s failed; stopped locally", self._registered_filters, exc_info=True
+            )
             return None
         return UnsubscribeResult.from_unsuback(*sent) if sent is not None else None
 
@@ -691,6 +693,11 @@ class MQTTClient:
         self._host = host
         self._port = port
         self._client_id = client_id
+        broker = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+        # Names this client in the connection lines; client_id may be empty.
+        self._broker_label = f"{broker} (client_id {client_id!r})" if client_id else broker
+        self._log_extra = {"mqtt_broker": broker, "mqtt_client_id": client_id}
+        self._log = logging.LoggerAdapter(log, self._log_extra)
         self._keepalive = keepalive
         self._clean_session = clean_session
         self._username = username
@@ -1048,6 +1055,7 @@ class MQTTClient:
             session_replay_timeout=self._session_replay_timeout,
             receive_maximum=connect_props.receive_maximum if connect_props is not None else None,
             maximum_packet_size=connect_props.maximum_packet_size if connect_props is not None else None,
+            log_extra=self._log_extra,
         )
         connect_packet = Connect(
             client_id=self._client_id,
@@ -1094,7 +1102,16 @@ class MQTTClient:
                 max_a = self._reconnect.max_attempts
                 if not self._reconnect.enabled or (max_a is not None and attempt >= max_a):
                     raise
-                log.warning("Connection failed, retrying in %.1fs", delay, exc_info=True)
+                # An expected failure while the broker is unreachable: one line,
+                # with the traceback only when debugging.
+                self._log.warning(
+                    "Connection to %s failed, retrying in %.1fs: %s: %s",
+                    self._broker_label,
+                    delay,
+                    type(e).__name__,
+                    e,
+                    exc_info=self._log.isEnabledFor(logging.DEBUG),
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * self._reconnect.backoff_factor, self._reconnect.max_delay)
             else:
@@ -1142,13 +1159,13 @@ class MQTTClient:
                 await asyncio.gather(protocol_run_task, return_exceptions=True)
 
             subs_to_restore = list(self._subscriptions)
-            log.warning("Connection lost, reconnecting...")
+            self._log.warning("Connection to %s lost, reconnecting...", self._broker_label)
             try:
                 await self._connect_with_retry(wait_before_first_attempt=True)
             except (MQTTConnectError, MQTTTimeoutError, OSError):
                 await self._notify_connection_recovery_failed()
                 raise
-            log.info("Successfully reconnected")
+            self._log.info("Successfully reconnected to %s", self._broker_label)
 
     async def _notify_connection_recovery_failed(self) -> None:
         if self._on_connection_recovery_failed is not None:

@@ -17,6 +17,8 @@ from zmqtt._internal.types.qos import QoS
 from zmqtt.errors import MQTTProtocolError
 
 log = logging.getLogger("zmqtt.protocol")
+# MQTTProtocol passes a LoggerAdapter that adds the client's broker and client ID to each record.
+Log: TypeAlias = "logging.Logger | logging.LoggerAdapter[logging.Logger]"
 
 # MQTT 5.0 §3.3.4: DISCONNECT reason code for a server exceeding the client's Receive Maximum.
 _RECEIVE_MAXIMUM_EXCEEDED: Final = 0x93
@@ -40,8 +42,7 @@ class _NoSessionReplay:
         publish: Publish,
         recipient: InboundRecipient,
     ) -> tuple[InboundRecipient, "_ReplayState"]:
-        if recipient.request is None and recipient.subscription is None:
-            log.warning("No subscriber for topic %r", publish.topic)
+        del publish
         return recipient, self
 
     async def drain(self, delivery: "InboundPublishFlow") -> "_ReplayState":
@@ -151,7 +152,7 @@ class _PersistentReplayBuffered:
                 self._expire_after_timeout(),
                 name="zmqtt-session-replay-expiration",
             )
-        log.debug("Buffered persistent-session replay for topic %r", publish.topic)
+        self._owner.log.debug("Buffered persistent-session replay for topic %r", publish.topic)
         return None, self
 
     async def drain(self, delivery: "InboundPublishFlow") -> "_ReplayState":
@@ -168,7 +169,7 @@ class _PersistentReplayBuffered:
             await self._deliver_pending(delivery)
             dropped = self._drop_pending()
             if dropped:
-                log.warning(
+                self._owner.log.warning(
                     "Dropped %d persistent-session replay messages after %.1f seconds without delivery",
                     dropped,
                     self._timeout,
@@ -194,7 +195,7 @@ class _PersistentReplayBuffered:
         except asyncio.CancelledError:
             return
         except Exception:
-            log.exception("Failed to expire persistent-session replay buffer")
+            self._owner.log.exception("Failed to expire persistent-session replay buffer")
             with contextlib.suppress(Exception):
                 await self._connection.abort()
         finally:
@@ -281,7 +282,9 @@ class InboundPublishFlow:
         session_replay_buffer_size: int,
         session_replay_timeout: float,
         receive_maximum: int | None = None,
+        log: Log = log,
     ) -> None:
+        self.log = log
         self._connection = connection
         self._state = state
         self._request_router = request_router
@@ -341,7 +344,7 @@ class InboundPublishFlow:
         """Complete an inbound QoS 2 exchange."""
         flight = self._state.inflight_qos2_in.pop(packet.packet_id, None)
         if flight is None:
-            log.warning("PUBREL for unknown packet_id %d, completing it", packet.packet_id)
+            self.log.warning("PUBREL for unknown packet_id %d, completing it", packet.packet_id)
             await self._connection.send_packet(
                 PubComp(packet_id=packet.packet_id, reason_code=_PACKET_IDENTIFIER_NOT_FOUND),
             )
@@ -364,13 +367,13 @@ class InboundPublishFlow:
         selection = self._select_subscription(publish)
         if selection.identifier_missing:
             identifier = publish.properties.subscription_identifier if publish.properties else None
-            log.warning(
+            self.log.warning(
                 "No subscription with identifier %r for topic %r, falling back to filter matching",
                 identifier,
                 publish.topic,
             )
         if selection.tied_filters:
-            log.warning(
+            self.log.warning(
                 "Multiple equally-specific subscribers for %r: %s, delivering to first",
                 publish.topic,
                 list(selection.tied_filters),
@@ -395,6 +398,9 @@ class InboundPublishFlow:
         recipient, next_replay = await replay.accept(publish, selected)
         if self._replay is replay:
             self._replay = next_replay
+        # Only the no-replay state passes on a message without a recipient.
+        if recipient is not None and recipient.request is None and recipient.subscription is None:
+            self.log.warning("No subscriber for topic %r", publish.topic)
         return recipient
 
     async def deliver_replay(
@@ -541,7 +547,7 @@ class InboundPublishFlow:
             if not entry.queue.empty():
                 entry.queue.get_nowait()
             return False
-        log.debug("Delivered message for topic %r to filter %r", message.topic, filter_)
+        self.log.debug("Delivered message for topic %r to filter %r", message.topic, filter_)
         return True
 
     @staticmethod
