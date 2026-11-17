@@ -1094,7 +1094,15 @@ class MQTTClient:
                 max_a = self._reconnect.max_attempts
                 if not self._reconnect.enabled or (max_a is not None and attempt >= max_a):
                     raise
-                log.warning("Connection failed, retrying in %.1fs", delay, exc_info=True)
+                # An expected failure while the broker is unreachable: one line,
+                # with the traceback only when debugging.
+                log.warning(
+                    "Connection failed, retrying in %.1fs: %s: %s",
+                    delay,
+                    type(e).__name__,
+                    e,
+                    exc_info=log.isEnabledFor(logging.DEBUG),
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * self._reconnect.backoff_factor, self._reconnect.max_delay)
             else:

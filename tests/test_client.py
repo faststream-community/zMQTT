@@ -1,6 +1,7 @@
 """Unit tests for MQTTClient construction and connect-retry behaviour."""
 
 import asyncio
+import logging
 import ssl
 from collections import deque
 from typing import Literal
@@ -132,6 +133,37 @@ async def test_connect_retries_after_connack_timeout() -> None:
     assert len(made) == 2  # the first (timed-out) attempt was retried
     assert made[0].closed  # the dead transport's fd was released
     assert client._protocol is not None
+
+
+@pytest.mark.parametrize(("level", "traceback"), [(logging.WARNING, False), (logging.DEBUG, True)])
+async def test_retried_connect_failure_is_logged_on_one_line(
+    caplog: pytest.LogCaptureFixture,
+    level: int,
+    *,
+    traceback: bool,
+) -> None:
+    connack = encode(ConnAck(session_present=False, return_code=0), version="3.1.1")
+    attempts = 0
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionRefusedError(61, "Connect call failed")
+        return LiveBrokerTransport(feed=connack)
+
+    client = MQTTClient("localhost", reconnect=ReconnectConfig(initial_delay=0.0), transport_factory=factory)
+
+    with caplog.at_level(level, logger="zmqtt.client"):
+        async with client:
+            pass
+
+    [record] = [r for r in caplog.records if r.name == "zmqtt.client"]
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == (
+        "Connection failed, retrying in 0.0s: ConnectionRefusedError: [Errno 61] Connect call failed"
+    )
+    assert bool(record.exc_info) is traceback
 
 
 async def test_mqtt_connect_timeout_gives_up_after_max_attempts() -> None:

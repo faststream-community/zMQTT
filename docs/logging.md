@@ -45,8 +45,11 @@ At `INFO` level the client layer logs reconnection events:
 
 ```
 WARNING zmqtt.client  Connection lost, reconnecting...
+WARNING zmqtt.client  Connection failed, retrying in 1.0s: ConnectionRefusedError: [Errno 111] Connect call failed ('10.0.0.5', 1883)
 INFO    zmqtt.client  Successfully reconnected
 ```
+
+Each failed attempt that will be retried is one line with the exception type and message. The traceback is added only when `zmqtt.client` is enabled for `DEBUG`.
 
 Duplicate-filter warnings come from `zmqtt.protocol` (see [Subscribing — Duplicate-filter guard](subscribing.md#duplicate-filter-guard)):
 
