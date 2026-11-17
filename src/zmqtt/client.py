@@ -34,7 +34,7 @@ from zmqtt._internal.types.message import Message
 from zmqtt._internal.types.qos import QoS
 from zmqtt._internal.types.retain_handling import RetainHandling
 from zmqtt._internal.types.topic import validate_publish, validate_response_topic, validate_subscribe_topic
-from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTTimeoutError
+from zmqtt.errors import MQTTConnectError, MQTTDisconnectedError, MQTTError, MQTTProtocolError, MQTTTimeoutError
 
 __all__ = (
     "ConnectionInfo",
@@ -614,7 +614,8 @@ class MQTTClient:
             reconnect: Reconnection policy. Defaults to
                 :class:`ReconnectConfig` with exponential back-off enabled.
             on_connection_recovery_failed: Async callback invoked once when a
-                connection that was established successfully cannot be restored.
+                connection that was established successfully cannot be restored,
+                including when the client stops on a protocol violation.
                 Initial connection failures and clean disconnects do not invoke it.
             mqtt_connect_timeout: Seconds to wait for the broker's CONNACK during
                 the MQTT CONNECT/CONNACK handshake — distinct from the TCP socket
@@ -1087,7 +1088,7 @@ class MQTTClient:
         while True:
             try:
                 await self._connect()
-            except (OSError, MQTTTimeoutError, MQTTConnectError) as e:  # noqa: PERF203
+            except (OSError, MQTTDisconnectedError, MQTTTimeoutError, MQTTConnectError) as e:  # noqa: PERF203
                 if isinstance(e, MQTTConnectError) and not self._retries_refusal(e):
                     raise
                 attempt += 1
@@ -1134,6 +1135,11 @@ class MQTTClient:
                 # Close the dead transport to release the file descriptor.
                 with contextlib.suppress(Exception):
                     await self._protocol._transport.close()
+            except MQTTProtocolError:
+                # A protocol violation is not a lost connection: stop without reconnecting.
+                self._connection_info = None
+                await self._notify_connection_recovery_failed()
+                raise
             else:
                 return  # clean disconnect — protocol.disconnect() was called
             finally:
@@ -1145,7 +1151,7 @@ class MQTTClient:
             log.warning("Connection lost, reconnecting...")
             try:
                 await self._connect_with_retry(wait_before_first_attempt=True)
-            except (MQTTConnectError, MQTTTimeoutError, OSError):
+            except (MQTTError, OSError):
                 await self._notify_connection_recovery_failed()
                 raise
             log.info("Successfully reconnected")
