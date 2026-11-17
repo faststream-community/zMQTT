@@ -135,8 +135,11 @@ Raised when the broker sends a packet that violates the MQTT spec — wrong pack
 
 On MQTT 5.0 it is also raised when the broker exceeds the client's
 [`receive_maximum` or `maximum_packet_size`](advanced/mqtt5.md#connect-properties).
-The client sends DISCONNECT with the matching reason code and stops without
-reconnecting.
+The client sends DISCONNECT with the matching reason code.
+
+A protocol violation is not retried. If it happens on a running connection, or
+on the handshake of a reconnect, the client stops without reconnecting and
+awaits `on_connection_recovery_failed`, if configured.
 
 ### `MQTTDisconnectedError`
 

@@ -2,7 +2,7 @@
 
 ## Default behaviour
 
-Reconnection is enabled by default and applies to both the **initial connection** and any subsequent connection loss. When a network-level error (`OSError`) occurs, including during an established connection after an RST, route change, or VPN transition, the client waits and retries with exponential back-off. When a running connection drops (`MQTTDisconnectedError` or `MQTTTimeoutError`), it reconnects and re-subscribes automatically. Your `async for msg in sub` loop keeps waiting and resumes delivering messages once the connection is restored.
+Reconnection is enabled by default and applies to both the **initial connection** and any subsequent connection loss. When a network-level error (`OSError`) occurs, including during an established connection after an RST, route change, or VPN transition, the client waits and retries with exponential back-off. When a running connection drops (`MQTTDisconnectedError` or `MQTTTimeoutError`), it reconnects and re-subscribes automatically. A broker that accepts the TCP connection but closes it before sending CONNACK is retried the same way. Your `async for msg in sub` loop keeps waiting and resumes delivering messages once the connection is restored.
 
 A broker refusal (`MQTTConnectError`) is retried like a network error only when it is transient: "server unavailable" (3.1.1 code 3, MQTT 5 `0x88`), "server busy" (`0x89`), "quota exceeded" (`0x97`) and "connection rate exceeded" (`0x9F`). A broker that is still starting up, or shedding load, sends these. These attempts count towards `max_attempts`. Any other refusal, such as bad credentials or not authorised, propagates immediately. `MQTTConnectError.is_transient` tells the two apart. To change which refusals are retried, see [Retrying other refusals](#retrying-other-refusals).
 
@@ -97,8 +97,10 @@ async with create_client(
 ```
 
 The async callback is awaited exactly once after a previously established
-connection cannot be restored. It is not called when the initial connection
-fails or when the client is disconnected cleanly. Initial connection failures
+connection cannot be restored. It is also awaited when the client stops because
+the broker violated the protocol, which is not retried (see
+[`MQTTProtocolError`](../error-handling.md#mqttprotocolerror)). It is not called
+when the initial connection fails or when the client is disconnected cleanly. Initial connection failures
 still propagate from `connect()` or the async context manager entry.
 
 After the callback returns, the client stops reconnecting and the terminal

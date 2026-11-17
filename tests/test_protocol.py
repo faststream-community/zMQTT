@@ -152,6 +152,14 @@ async def test_connect_wrong_packet_raises() -> None:
         await protocol.connect(connect)
 
 
+async def test_connect_malformed_packet_raises() -> None:
+    protocol, transport = make_protocol()
+    connect = Connect(client_id="test", clean_session=True, keepalive=60)
+    transport.feed(b"\x00\x00")  # packet type 0 is reserved
+    with pytest.raises(MQTTProtocolError, match="Malformed packet"):
+        await protocol.connect(connect)
+
+
 async def test_connect_timeout_raises() -> None:
     transport = FakeTransport()
     protocol = MQTTProtocol(transport, SessionState(), connect_timeout=0.05)

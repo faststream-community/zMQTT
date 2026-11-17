@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Iterable, Iterator
 from typing import Final, Literal
 
 from zmqtt._internal import topic_matching
@@ -242,7 +242,7 @@ class MQTTProtocol:
             while True:
                 data = await self._transport.read(4096)
                 self._buf.feed(data)
-                for pkt in self._buf:
+                for pkt in self._received_packets():
                     if not isinstance(pkt, ConnAck):
                         msg = f"Expected CONNACK, got {pkt!r}"
                         raise MQTTProtocolError(msg)
@@ -266,6 +266,16 @@ class MQTTProtocol:
                     self._send_quota = asyncio.Semaphore(send_quota)
                     self.inbound.begin_session(session_present=pkt.session_present)
                     return pkt
+
+    def _received_packets(self) -> Iterator[AnyPacket]:
+        """Yield the complete packets in the buffer; malformed bytes raise MQTTProtocolError."""
+        try:
+            yield from self._buf
+        except PacketTooLargeError:
+            raise
+        except ValueError as e:
+            msg = f"Malformed packet from broker: {e}"
+            raise MQTTProtocolError(msg) from e
 
     @contextlib.asynccontextmanager
     async def _rejecting_oversized_packets(self) -> AsyncGenerator[None]:
@@ -661,7 +671,7 @@ class MQTTProtocol:
     async def _read_loop(self) -> None:
         async with self._rejecting_oversized_packets():
             while True:
-                for packet in self._buf:
+                for packet in self._received_packets():
                     await self._dispatch(packet)
                 try:
                     data = await self._transport.read(4096)
