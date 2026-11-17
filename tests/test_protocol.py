@@ -13,11 +13,12 @@ from typing import Literal
 import pytest
 
 from zmqtt import MQTTClient
+from zmqtt._internal.packets.auth import Auth
 from zmqtt._internal.packets.codec import AnyPacket, encode
 from zmqtt._internal.packets.connect import ConnAck, Connect
 from zmqtt._internal.packets.disconnect import Disconnect
 from zmqtt._internal.packets.ping import PingReq
-from zmqtt._internal.packets.properties import ConnAckProperties, PublishProperties
+from zmqtt._internal.packets.properties import AuthProperties, ConnAckProperties, PublishProperties
 from zmqtt._internal.packets.publish import PubAck, PubComp, Publish, PubRec, PubRel
 from zmqtt._internal.packets.reader import PacketBuffer
 from zmqtt._internal.packets.subscribe import SubAck, Subscribe, SubscriptionRequest, UnsubAck
@@ -812,3 +813,28 @@ async def test_pending_futures_chain_the_error_that_killed_the_connection() -> N
 
     with pytest.raises(MQTTProtocolError):
         await run_task
+
+
+async def _lose_connection(protocol: MQTTProtocol, transport: FakeTransport) -> None:
+    transport._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.run()
+
+
+async def test_ping_after_connection_lost_raises_without_sending() -> None:
+    # While the client reconnects, a ping must not write to the dead transport.
+    protocol, transport = make_protocol()
+    await _lose_connection(protocol, transport)
+
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.ping(timeout=0.1)
+    assert transport.sent == []
+
+
+async def test_auth_after_connection_lost_raises_without_sending() -> None:
+    protocol, transport = make_protocol(version="5.0")
+    await _lose_connection(protocol, transport)
+
+    with pytest.raises(MQTTDisconnectedError):
+        await protocol.send_auth(Auth(reason_code=0x18, properties=AuthProperties(authentication_method="test")))
+    assert transport.sent == []

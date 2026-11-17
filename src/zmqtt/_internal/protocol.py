@@ -634,6 +634,7 @@ class MQTTProtocol:
 
     async def ping(self, timeout: float | None = None) -> float:
         """Send PINGREQ and return RTT in seconds when PINGRESP is received."""
+        self._ensure_alive()
         loop = asyncio.get_running_loop()
         future: asyncio.Future[None] = loop.create_future()
         self._ping_waiters.append(future)
@@ -655,6 +656,7 @@ class MQTTProtocol:
             raise RuntimeError(
                 msg,
             )
+        self._ensure_alive()
         await self._send(self._encode(packet))
         log.debug("Sent AUTH with reason_code=%d", packet.reason_code)
 
