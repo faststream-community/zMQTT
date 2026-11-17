@@ -1087,7 +1087,7 @@ class MQTTClient:
         while True:
             try:
                 await self._connect()
-            except (OSError, MQTTTimeoutError, MQTTConnectError) as e:  # noqa: PERF203
+            except (OSError, MQTTTimeoutError, MQTTConnectError, MQTTDisconnectedError) as e:  # noqa: PERF203
                 if isinstance(e, MQTTConnectError) and not self._retries_refusal(e):
                     raise
                 attempt += 1
@@ -1145,7 +1145,7 @@ class MQTTClient:
             log.warning("Connection lost, reconnecting...")
             try:
                 await self._connect_with_retry(wait_before_first_attempt=True)
-            except (MQTTConnectError, MQTTTimeoutError, OSError):
+            except (MQTTConnectError, MQTTTimeoutError, MQTTDisconnectedError, OSError):
                 await self._notify_connection_recovery_failed()
                 raise
             log.info("Successfully reconnected")

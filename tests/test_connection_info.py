@@ -22,6 +22,7 @@ from zmqtt import (
 )
 from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck
+from zmqtt._internal.packets.subscribe import SubAck
 from zmqtt._internal.transport.base import Transport
 from zmqtt.client import TransportFactory
 
@@ -166,12 +167,14 @@ async def test_background_failure_clears_snapshot(failure: Exception) -> None:
         assert observed == ([] if isinstance(failure, ValueError) else [True])
 
 
-@pytest.mark.parametrize("failure", ["refusal", "timeout"])
+@pytest.mark.parametrize("failure", ["refusal", "timeout", "disconnect"])
 async def test_failed_recovery_clears_snapshot_before_callback(failure: str) -> None:
     first, retry = FakeTransport(), FakeTransport()
     first.feed(encode(ConnAck(session_present=False, return_code=0), version="5.0"))
     if failure == "refusal":
         retry.feed(encode(ConnAck(session_present=False, return_code=0x87), version="5.0"))
+    if failure == "disconnect":
+        retry._rx.append(MQTTDisconnectedError("Connection closed by remote"))
     transports = iter([first, retry])
     observed: list[bool] = []
 
@@ -192,13 +195,21 @@ async def test_failed_recovery_clears_snapshot_before_callback(failure: str) -> 
         on_connection_recovery_failed=callback,
     )
     async with client:
-        first._rx.append(MQTTDisconnectedError("lost"))
-        assert client._run_task is not None
-        with pytest.raises(MQTTConnectError if failure == "refusal" else MQTTTimeoutError):
-            await asyncio.wait_for(asyncio.shield(client._run_task), timeout=2)
-        assert observed == [True]
-        assert_disconnected(client)
-        assert not retry.is_connected
+        first.feed(encode(SubAck(packet_id=1, return_codes=(0,)), version="5.0"))
+        async with client.subscribe("t/#") as subscription:
+            pending = asyncio.create_task(anext(subscription))
+            first._rx.append(MQTTDisconnectedError("lost"))
+            assert client._run_task is not None
+            error = {"refusal": MQTTConnectError, "timeout": MQTTTimeoutError, "disconnect": MQTTDisconnectedError}[
+                failure
+            ]
+            with pytest.raises(error):
+                await asyncio.wait_for(asyncio.shield(client._run_task), timeout=2)
+            with pytest.raises(error):
+                await asyncio.wait_for(pending, timeout=2)
+            assert observed == [True]
+            assert_disconnected(client)
+            assert not retry.is_connected
 
 
 @pytest.mark.parametrize(("version", "code"), [("3.1.1", 5), ("5.0", 0x87)])
