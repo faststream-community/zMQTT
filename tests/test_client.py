@@ -21,6 +21,7 @@ from zmqtt._internal.packets.codec import encode
 from zmqtt._internal.packets.connect import ConnAck
 from zmqtt._internal.packets.ping import PingReq, PingResp
 from zmqtt._internal.packets.publish import Publish
+from zmqtt._internal.packets.subscribe import SubAck, UnsubAck
 from zmqtt._internal.packets.types import PacketType
 from zmqtt._internal.subscription_index import SubscriptionEntry
 from zmqtt._internal.transport.base import Transport
@@ -300,3 +301,153 @@ async def test_detach_survives_reconnect_before_first_publish(
         # PUBLISH buffered with CONNACK or arriving after the replay timeout.
         assert {data[0] >> 4 for data in retry.sent} == {PacketType.CONNECT, PacketType.PINGREQ}
         assert subscription._queue.empty()
+
+
+@pytest.mark.parametrize("version", ["3.1.1", "5.0"])
+async def test_connect_retries_disconnect_before_connack(version: Literal["3.1.1", "5.0"]) -> None:
+    failed = FakeTransport()
+    failed._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+    accepted = FakeTransport(feed=encode(ConnAck(session_present=False, return_code=0), version=version))
+    transports = iter((failed, accepted))
+    made: list[FakeTransport] = []
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        transport = next(transports)
+        made.append(transport)
+        return transport
+
+    client = MQTTClient(
+        "localhost",
+        version=version,
+        transport_factory=factory,
+        reconnect=ReconnectConfig(initial_delay=0, max_attempts=None),
+    )
+    async with client:
+        assert len(made) == 2
+        assert failed.closed
+        assert client.connection_info.connection_id == 1
+
+
+@pytest.mark.parametrize(("enabled", "attempts"), [(True, 3), (False, 1)])
+async def test_connack_disconnect_respects_retry_limits(*, enabled: bool, attempts: int) -> None:
+    made: list[FakeTransport] = []
+    observed: list[bool] = []
+
+    async def callback() -> None:
+        observed.append(True)
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        transport = FakeTransport()
+        transport._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+        made.append(transport)
+        return transport
+
+    client = MQTTClient(
+        "localhost",
+        transport_factory=factory,
+        reconnect=ReconnectConfig(enabled=enabled, initial_delay=0, max_attempts=attempts),
+        on_connection_recovery_failed=callback,
+    )
+    with pytest.raises(MQTTDisconnectedError, match="Connection closed by remote"):
+        await client.connect()
+    assert len(made) == attempts
+    assert all(transport.closed for transport in made)
+    assert observed == []
+
+
+async def test_connack_disconnect_uses_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("zmqtt.client.asyncio.sleep", sleep)
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        transport = FakeTransport()
+        transport._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+        return transport
+
+    client = MQTTClient(
+        "localhost",
+        transport_factory=factory,
+        reconnect=ReconnectConfig(initial_delay=1, max_delay=3, backoff_factor=2, max_attempts=5),
+    )
+    with pytest.raises(MQTTDisconnectedError):
+        await client.connect()
+    assert delays == [1, 2, 3, 3]
+
+
+async def test_cancel_retry_after_connack_disconnect() -> None:
+    failed = FakeTransport()
+    failed._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+    retry = LiveBrokerTransport()
+    transports = iter((failed, retry))
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        return next(transports)
+
+    client = MQTTClient(
+        "localhost",
+        transport_factory=factory,
+        reconnect=ReconnectConfig(initial_delay=0, max_attempts=None),
+    )
+    task = asyncio.create_task(client.connect())
+    try:
+        await asyncio.wait_for(retry.connect_sent.wait(), timeout=1)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert task.cancelled()
+    assert failed.closed
+    assert retry.closed
+
+
+@pytest.mark.parametrize("version", ["3.1.1", "5.0"])
+async def test_subscription_survives_disconnect_during_reconnect(version: Literal["3.1.1", "5.0"]) -> None:
+    connack = encode(ConnAck(session_present=False, return_code=0), version=version)
+    first = FakeTransport(feed=connack)
+    failed = FakeTransport()
+    failed._rx.append(MQTTDisconnectedError("Connection closed by remote"))
+    restored = FakeTransport(feed=connack)
+    transports = iter((first, failed, restored))
+
+    async def factory(host: str, port: int, tls: ssl.SSLContext | bool | None) -> Transport:  # noqa: ARG001
+        return next(transports)
+
+    async def deliver() -> None:
+        for transport in (first, restored):
+            while not any(data[0] >> 4 == PacketType.SUBSCRIBE for data in transport.sent):  # noqa: ASYNC110
+                await asyncio.sleep(0)
+            transport._rx.append(encode(SubAck(packet_id=1, return_codes=(0,)), version=version))
+            transport._rx.append(
+                encode(
+                    Publish(topic="t/x", payload=b"restored", qos=QoS.AT_MOST_ONCE, retain=False, dup=False),
+                    version=version,
+                )
+            )
+        while not any(data[0] >> 4 == PacketType.UNSUBSCRIBE for data in restored.sent):  # noqa: ASYNC110
+            await asyncio.sleep(0)
+        restored._rx.append(encode(UnsubAck(packet_id=2), version=version))
+
+    client = MQTTClient(
+        "localhost",
+        version=version,
+        transport_factory=factory,
+        reconnect=ReconnectConfig(initial_delay=0, max_attempts=None),
+    )
+    delivering = asyncio.create_task(deliver())
+    try:
+        async with client, client.subscribe("t/#", qos=QoS.AT_MOST_ONCE) as subscription:
+            assert (await asyncio.wait_for(anext(subscription), timeout=1)).payload == b"restored"
+            first._rx.append(MQTTDisconnectedError("lost"))
+            assert (await asyncio.wait_for(anext(subscription), timeout=1)).payload == b"restored"
+            assert first.closed
+            assert failed.closed
+            assert client.connection_info.connection_id == 2
+            assert client._run_task is not None
+            assert not client._run_task.done()
+        await asyncio.wait_for(delivering, timeout=1)
+    finally:
+        delivering.cancel()
+        await asyncio.gather(delivering, return_exceptions=True)
