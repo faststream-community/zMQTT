@@ -37,6 +37,20 @@ def test_non_positive_mqtt_connect_timeout_raises(bad: float) -> None:
         create_client("localhost", mqtt_connect_timeout=bad)
 
 
+@pytest.mark.parametrize("version", ["3.1.1", "5.0"])
+@pytest.mark.parametrize("bad", [-1, 65536])
+def test_out_of_range_keepalive_raises(version: Literal["3.1.1", "5.0"], bad: int) -> None:
+    with pytest.raises(ValueError, match=r"keepalive must be in 0\.\.65535"):
+        create_client("localhost", version=version, keepalive=bad)
+
+
+@pytest.mark.parametrize("version", ["3.1.1", "5.0"])
+@pytest.mark.parametrize("keepalive", [0, 65535])
+def test_boundary_keepalive_is_accepted(version: Literal["3.1.1", "5.0"], keepalive: int) -> None:
+    client = MQTTClient("localhost", version=version, keepalive=keepalive)
+    assert client._keepalive == keepalive
+
+
 def test_create_client_accepts_will() -> None:
     will = Will(
         topic="status/client",
