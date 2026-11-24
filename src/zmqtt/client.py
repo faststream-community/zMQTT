@@ -63,6 +63,7 @@ _MAX_RECEIVE_MAXIMUM: Final = 65_535
 _MAX_PACKET_SIZE: Final = 268_435_460
 # §1.5.4: UTF-8 Encoded Strings are length-prefixed by a Two Byte Integer.
 _MAX_STRING_BYTES: Final = 65_535
+_MAX_KEEPALIVE: Final = 65_535
 
 log = logging.getLogger(__name__)
 
@@ -669,6 +670,9 @@ class MQTTClient:
         """
         if not mqtt_connect_timeout > 0:
             msg = "mqtt_connect_timeout must be positive"
+            raise ValueError(msg)
+        if not 0 <= keepalive <= _MAX_KEEPALIVE:
+            msg = f"keepalive must be in 0..{_MAX_KEEPALIVE}"
             raise ValueError(msg)
         if session_replay_buffer_size < 0:
             msg = "session_replay_buffer_size must be non-negative"
