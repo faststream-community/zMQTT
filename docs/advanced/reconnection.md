@@ -6,10 +6,6 @@ Reconnection is enabled by default and applies to both the **initial connection*
 
 A broker refusal (`MQTTConnectError`) is retried like a network error only when it is transient: "server unavailable" (3.1.1 code 3, MQTT 5 `0x88`), "server busy" (`0x89`), "quota exceeded" (`0x97`) and "connection rate exceeded" (`0x9F`). A broker that is still starting up, or shedding load, sends these. These attempts count towards `max_attempts`. Any other refusal, such as bad credentials or not authorised, propagates immediately. `MQTTConnectError.is_transient` tells the two apart. To change which refusals are retried, see [Retrying other refusals](#retrying-other-refusals).
 
-If the peer closes the connection before sending CONNACK (`MQTTDisconnectedError`),
-the attempt is retried with the same back-off and counts towards `max_attempts`.
-This applies to both the initial connection and recovery of an established session.
-
 Your application code does not need to handle reconnection at all in the common case.
 
 ## `ReconnectConfig`
