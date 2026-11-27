@@ -17,6 +17,7 @@ permissions:
 jobs:
   notify:
     name: "Telegram notification"
+    if: github.event.pull_request.user.login != 'Lancetnik'
     runs-on: ubuntu-latest
     steps:
       - name: Send Telegram notification for new issue or pull request
